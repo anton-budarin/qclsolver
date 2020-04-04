@@ -13,6 +13,6 @@ setup(
      install_requires=['numpy', 
                      'scipy', 
                      'matplotlib',
-                     'lxml'],
+                     'lxml', 'aftershoq'],
      zip_safe=False
      )
