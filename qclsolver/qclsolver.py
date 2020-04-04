@@ -139,9 +139,9 @@ class qclSolver:
 
         self.eigs = 1
         self.psi = 1
+        return 0
 
-        # ============================================
-
+    # ============================================
     # ================ TECHNICAL =================
     # ============================================
 
@@ -154,11 +154,11 @@ class qclSolver:
         n[-2:] = 0
         return interp1d(z, n, kind='previous'), z[-1]
 
-    def setPotential(self, U, Hart=0.):
+    def setPotential(self, U, hart=0.):
         self.U = U
         self.potential = np.array(
             [(self.struct.layers[int(self.index(z))].material.params['Ec']) for z in
-             self.grid]) - U * self.grid / 10 ** 7 + Hart
+             self.grid]) - U * self.grid / 10 ** 7 + hart
 
     def setBGDoping(self, BGDoping):
 
@@ -245,7 +245,7 @@ class qclSolver:
     def SPSolve(self, Resolution=10 ** (-3), iteration=3):
         self.eigTM(Resolution)
         for i in range(0, iteration):
-            self.setPotential(self.U, Hart=self.solvePoisson())
+            self.setPotential(self.U, hart=self.solvePoisson())
             self.eigTM(Resolution)
 
     def RESolve(self, r_iter=3, Parallel=True):
@@ -259,18 +259,18 @@ class qclSolver:
         for i in range(0, r_iter):
             R_1, R_2 = self.Build_R()
 
-            Population = np.linalg.eig((W + R_1 + R_2).transpose())
+            population = np.linalg.eig((W + R_1 + R_2).transpose())
 
-            ind = np.argmin(np.abs(Population[0].real))
-            Population = Population[1][:, ind]
-            Population = Population.real / (Population.real.sum()) * self.N_carr / 10 ** 4
+            ind = np.argmin(np.abs(population[0].real))
+            population = population[1][:, ind]
+            population = population.real / (population.real.sum()) * self.N_carr / 10 ** 4
 
         for i in range(0, len(self.eigs)):
             R_1[i, i] = 0
             R_2[i, i] = 0
 
-        self.J_d = -qclSolver.el * (np.sum(R_1 - R_2, axis=1) * Population).sum()
-        self.Population = Population
+        self.J_d = -qclSolver.el * (np.sum(R_1 - R_2, axis=1) * population).sum()
+        self.Population = population
         self.TPop = False
 
     # ============================================
@@ -393,7 +393,7 @@ class qclSolver:
 
         k_bol = self.k_bol
         qs_s = el ** 2 * (h / skip * dop.sum() / (
-                    self.struct.length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be avareged
+                    self.struct.length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be averaged
 
         q = np.sqrt(k_f + k_i - 2 * np.sqrt(k_f) * np.sqrt(k_i) * np.cos(theta) + qs_s)
         I = 0
@@ -592,7 +592,7 @@ class qclSolver:
 
     Chi = lambda x, TE: np.heaviside(-x, 0) + np.heaviside(x, 0) * np.exp(-np.abs(x) / qclSolver.k_bol / TE)
 
-    def sigma_b(Delta_ab, N_b, m_b, TE):
+    def sigma_b(delta_ab, N_b, m_b, TE):
         planck = qclSolver.planck
         Beta = 1 / qclSolver.k_bol / TE
         D_e = m_b / np.pi / planck ** 2
@@ -601,7 +601,7 @@ class qclSolver:
                       1 / 6.24150965 / (10 ** 13),
                       xtol=1e-30)
 
-        return np.log(1 + np.exp(Beta * mu_b) * qclSolver.Chi(planck * Delta_ab, TE)) / np.logaddexp(0, Beta * mu_b)
+        return np.log(1 + np.exp(Beta * mu_b) * qclSolver.Chi(planck * delta_ab, TE)) / np.logaddexp(0, Beta * mu_b)
 
     # ============================================
     # ============ LIGHT INTERACTION =============
