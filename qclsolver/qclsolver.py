@@ -708,7 +708,7 @@ class qclSolver:
         Omega = 2 * np.pi * qclSolver.c / lam
         S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 90)
 
-        self.P = Omega * planck * S * self.periods * self.dim_w * alpha_m
+        self.P = Omega * planck * S * self.periods * self.dim_w * self.alpha_m
         print('Optical Power:', self.P / 1000, 'mWt')
 
     # ============================================
