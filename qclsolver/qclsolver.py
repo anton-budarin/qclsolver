@@ -1,8 +1,3 @@
-from aftershoq.structure import Structure
-from aftershoq.qcls import *
-
-from aftershoq.materials import *
-
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
@@ -40,6 +35,7 @@ class qclSolver:
         self.lattconst = np.array(
             [(self.struct.layers[int(self.index(z))].material.params['lattconst']) for z in self.grid])
         self.comp = np.array([(self.struct.layers[int(self.index(z))].material.x) for z in self.grid])
+        self.Ep = np.array([(self.struct.layers[int(self.index(z))].material.params['Ep']) for z in self.grid])
 
         self.dop = 0.
         for i in range(0, len(struct.dopings)):
@@ -82,7 +78,7 @@ class qclSolver:
     def eigTM(self, resolution=10 ** (-3)):
         m = self.meff * self.m0
         step = self.step / 10 ** 9
-        Ep = np.array([(self.struct.layers[int(self.index(z))].material.params['Ep']) for z in self.grid])
+        Ep = self.Ep
 
         Energy = np.arange(np.amin(self.potential), np.amax(self.potential), resolution)
         boundary = lambda E: np.dot(qclSolver.buildTM(E, self.potential, Ep, m, step)[:, :, -1], [1, -1]).sum()
@@ -98,7 +94,7 @@ class qclSolver:
 
         for i in range(0, np.size(Energy) - 1):
             if (val[i] * val[i + 1] < 0):
-                eig.append(brentq(lambda E: boundary(E), Energy[i], Energy[i + 1], xtol=1e-20))
+                eig.append(brentq(lambda E: boundary(E).real, Energy[i], Energy[i + 1], xtol=1e-20))
 
         for E in eig:
             matArray = qclSolver.buildTM(E, self.potential, Ep, m, step)
@@ -175,7 +171,7 @@ class qclSolver:
         potential = self.potential
         U = self.U / 10 ** 7
         ind = np.zeros(0, dtype=int)
-        Ep = np.array([(self.struct.layers[int(self.index(z))].material.params['Ep']) for z in self.grid])
+        Ep = self.Ep
 
         for i in range(0, len(eigs)):
             if eigs[i] > potential[-1]:
@@ -205,8 +201,7 @@ class qclSolver:
         N = len(z)
         mass_sub = self.mass_sub
 
-        Perm = np.array(
-            [(self.struct.layers[int(self.index(z))].material.params['eps0']) for z in self.grid]) * self.eps0
+        Perm = self.Perm
 
         N_car_tot = self.N_carr
 
@@ -522,7 +517,7 @@ class qclSolver:
         length = self.struct.length
         E_i = self.eigs[i]
         E_f = self.eigs[f]
-        Ep = np.array([(self.struct.layers[int(self.index(z))].material.params['Ep']) for z in self.grid])
+        Ep = self.Ep
 
         front = np.argwhere(grid <= side)[-1][-1]
         back = np.argwhere(grid <= side + length)[-1][-1]
@@ -578,10 +573,10 @@ class qclSolver:
 
                     delta_if = -(eigs[i] - eigs[f] + self.U * length / 10 ** 7) / planck * 1.60218e-19
                     R_forw[i][f] = 2 * self.findOmega(i, f) ** 2 * tau_ort / (
-                                1 + delta_if ** 2 * tau_ort ** 2) * qclSolver.sigma_b(delta_if, Population[i],
+                                1 + delta_if ** 2 * tau_ort ** 2) * self.sigma_b(delta_if, Population[i],
                                                                                       mass_sub[i], TE)
                     R_back[f][i] = 2 * self.findOmega(i, f) ** 2 * tau_ort / (
-                                1 + delta_if ** 2 * tau_ort ** 2) * qclSolver.sigma_b(-delta_if, Population[f],
+                                1 + delta_if ** 2 * tau_ort ** 2) * self.sigma_b(-delta_if, Population[f],
                                                                                       mass_sub[f], TE)
 
         for i in range(0, N):
