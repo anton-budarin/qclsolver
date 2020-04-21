@@ -60,16 +60,15 @@ class qclSolver:
             self.alpha_m = 7.5
             self.alpha_w = 7.5
             self.Gamma_overlap = 0.6
-            self.kin_balance = False
         else:
             self.refr = 3.4
             self.alpha_m = 3.
             self.alpha_w = 3.
             self.Gamma_overlap = 0.6
-            self.kin_balance = True
 
         self.evaluate_W = True
         self.TPop = True
+        self.P = -1
 
     # ============================================
     # ================== EIGS ====================
@@ -573,11 +572,10 @@ class qclSolver:
 
                     delta_if = -(eigs[i] - eigs[f] + self.U * length / 10 ** 7) / planck * 1.60218e-19
                     R_forw[i][f] = 2 * self.findOmega(i, f) ** 2 * tau_ort / (
-                                1 + delta_if ** 2 * tau_ort ** 2) * self.sigma_b(delta_if, Population[i],
-                                                                                      mass_sub[i], TE)
+                                1 + delta_if ** 2 * tau_ort ** 2) * qclSolver.sigma_b(delta_if, Population[i],
+                                                                            mass_sub[i], TE)
                     R_back[f][i] = 2 * self.findOmega(i, f) ** 2 * tau_ort / (
-                                1 + delta_if ** 2 * tau_ort ** 2) * self.sigma_b(-delta_if, Population[f],
-                                                                                      mass_sub[f], TE)
+                                1 + delta_if ** 2 * tau_ort ** 2) * qclSolver.sigma_b(-delta_if, Population[f],mass_sub[f], TE)
 
         for i in range(0, N):
             R_forw[i][i] = -R_forw[i][:].sum()
@@ -701,26 +699,26 @@ class qclSolver:
 
         planck = self.planck
         Omega = 2 * np.pi * qclSolver.c / lam
-        S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 90)
+        S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 34,xtol=0.01)
 
         self.P = Omega * planck * S * self.periods * self.dim_w * self.alpha_m
-        print('Optical Power:', self.P / 1000, 'mWt')
 
     # ============================================
     # ================= OUTPUT ===================
     # ============================================
 
-    def plotWF(self):
+    def plotWF(self, saveFile = True):
 
         plt.plot(self.grid, self.potential)
         plt.xlabel('z, nm')
         plt.ylabel('E, eV')
         for i in range(0, len(self.eigs)):
             plt.plot(self.grid[:], (self.psi[:, i] / 10 ** 4) ** 2 / 20 + self.eigs[i])
+        if saveFile:
+            plt.savefig('./WaveFunc.png', format='png', dpi=1000)
         plt.show()
-        print(self.eigs)
 
-    def plotGainSP(self, lam_min, lam_max):
+    def plotGainSP(self, lam_min, lam_max, saveFile = True):
 
         lam = np.linspace(lam_min, lam_max, 1000) / 10 ** (6)
 
@@ -731,11 +729,32 @@ class qclSolver:
         plt.plot(lam * 10 ** 6, gain_r)
         plt.plot(lam * 10 ** 6, np.zeros_like(gain_r) + self.alpha_m + self.alpha_w, 'r--')
         plt.grid(True)
+        if saveFile:
+            plt.savefig('./Gain.png', format='png', dpi=1000)
         plt.show()
 
-    def plotPopulation(self):
+    def plotPopulation(self, saveFile = True):
 
         print(self.Population)
         plt.plot(self.Population)
+        if saveFile:
+            plt.savefig('./Population.png', format='png', dpi=1000)
         plt.show()
-        print('Current density:', round(self.J_d / 1000, 3), 'kA/cm^2')
+
+    def generateParOutput(self):
+
+        print(self.eigs)
+        if not self.evaluate_W :
+            print('States Populations:',self.Population)
+            print('Current density:', round(self.J_d / 1000, 3), 'kA/cm^2')
+            if self.P > 0 :
+                print('Optical Power:', self.P / 1000, 'mWt')
+
+    def generatePlotOutput(self, lam_min = None, lam_max = None, saveFile = True):
+        self.plotWF(saveFile=saveFile)
+        if not self.evaluate_W:
+            self.plotPopulation(saveFile=saveFile)
+            if lam_max != None :
+                self.plotGainSP(lam_min=lam_min, lam_max=lam_max, saveFile=saveFile)
+
+
