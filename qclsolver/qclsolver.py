@@ -8,13 +8,6 @@ from itertools import product
 
 
 class qclSolver:
-    el = -1.6021766208 * (10 ** (-19))
-    planck = 1.054571800 * (10 ** (-34))
-    planck_e = 6.582119569 * (10 ** (-16))
-    m0 = 9.10938356 * (10 ** (-31))
-    eps0 = 8.85418781762 * (10 ** (-12))
-    k_bol = 1.38064852 * (10 ** (-23))
-    c = 3 * 10 ** 8
 
     fundamentals = {
 
@@ -29,23 +22,6 @@ class qclSolver:
     }
     def __init__(self, struct, interval=2, step=0.05, side=5., TE=400.):
 
-        params = {
-
-            "step": step,
-            "side": side,
-            "TE": TE,
-            "tau-pure": 0.1 * 10 ** (-12),
-            "periods": 30,
-            "dim_l": 0.3 ,
-            "dim_h": 4. / 10 ** 4,
-            "dim_v": 0.15,
-            "gamma-overlap": 1.,
-            "ref-ind": 3.4,
-
-
-        }
-
-
         self.step = step
         self.struct = struct
         self.side = side
@@ -59,7 +35,7 @@ class qclSolver:
         self.meff = np.array([(struct.layers[int(self.index(z))].material.params['meff']) for z in self.grid])
         self.Valloy = np.array([(struct.layers[int(self.index(z))].material.params['Valloy']) for z in self.grid])
         self.Perm = np.array(
-            [(self.struct.layers[int(self.index(z))].material.params['eps0']) for z in self.grid]) * self.eps0
+            [(self.struct.layers[int(self.index(z))].material.params['eps0']) for z in self.grid]) * qclSolver.fundamentals["eps0"]
         self.lattconst = np.array(
             [(self.struct.layers[int(self.index(z))].material.params['lattconst']) for z in self.grid])
         self.comp = np.array([(self.struct.layers[int(self.index(z))].material.x) for z in self.grid])
@@ -105,7 +81,7 @@ class qclSolver:
     # ============================================
 
     def eigTM(self, resolution=10 ** (-3)):
-        m = self.meff * self.m0
+        m = self.meff * qclSolver.fundamentals["m0"]
         step = self.step / 10 ** 9
         Ep = self.Ep
 
@@ -142,8 +118,11 @@ class qclSolver:
     def buildTM(E, Ev, Ep, m, step):
         dE = (E - Ev) * 1.60218e-19
 
-        m_np = m * (1 + (E - Ev) / (m / qclSolver.m0 * Ep))
-        k = np.sqrt(2 * m_np * dE + 0j) / qclSolver.planck
+        planck = qclSolver.fundamentals["planck"]
+        m0 = qclSolver.fundamentals["m0"]
+
+        m_np = m * (1 + (E - Ev) / (m / m0 * Ep))
+        k = np.sqrt(2 * m_np * dE + 0j) / planck
         kt = k / m_np
         kp = (k[:-1] + k[1:]) / 2
         km = (k[:-1] - k[1:]) / 2
@@ -218,7 +197,7 @@ class qclSolver:
             mass_sub[i] = step * (
                         self.meff * (1 + (eigs[i] - self.potential) / self.meff / Ep) * (psi[:, i] ** 2)).sum()
 
-        self.eigs, self.psi, self.mass_sub = eigs, psi, mass_sub * self.m0
+        self.eigs, self.psi, self.mass_sub = eigs, psi, mass_sub * qclSolver.fundamentals["m0"]
 
     # ============================================
 
@@ -226,7 +205,7 @@ class qclSolver:
         h = self.step / 10 ** 9
         side = self.side / 10 ** 9
         z = self.grid / 10 ** 9
-        el = self.el
+        el = qclSolver.fundamentals["e-charge"]
         N = len(z)
         mass_sub = self.mass_sub
 
@@ -261,8 +240,8 @@ class qclSolver:
         return np.append(np.append(np.zeros(front), V_ro), np.zeros(N - back))
 
     def TDistr(m, E, mu, TE, TL):
-        k = qclSolver.k_bol
-        planck = qclSolver.planck
+        k = qclSolver.fundamentals["k-bol"]
+        planck = qclSolver.fundamentals["planck"]
 
         return m / np.pi / planck / planck * k * TL * np.logaddexp(0, (mu - E) * 1.60218e-19 / k / TE)
 
@@ -274,6 +253,7 @@ class qclSolver:
 
     def RESolve(self, r_iter=3, Parallel=True):
 
+        el = qclSolver.fundamentals["e-charge"]
         if self.evaluate_W:
             self.Build_W(Parallel)
             self.evaluate_W = False
@@ -293,7 +273,7 @@ class qclSolver:
             R_1[i, i] = 0
             R_2[i, i] = 0
 
-        self.J_d = -qclSolver.el * (np.sum(R_1 - R_2, axis=1) * population).sum()
+        self.J_d = -el * (np.sum(R_1 - R_2, axis=1) * population).sum()
         self.Population = population
         self.TPop = False
 
@@ -311,13 +291,13 @@ class qclSolver:
         theta = np.linspace(0., np.pi, pi_pts)
         th_step = (theta[1] - theta[0])
         h = skip * self.step / 10 ** 9
-        el = self.el
-        planck = self.planck
-        eps0 = self.eps0
+        el = qclSolver.fundamentals["e-charge"]
+        planck = qclSolver.fundamentals["planck"]
+        eps0 = qclSolver.fundamentals["eps0"]
         E_lo = self.struct.layers[0].material.params['ELO'] * 1.60218e-19
         perm0 = self.struct.layers[0].material.params['eps0']
         perm_inf = self.struct.layers[0].material.params['epsinf']
-        k_bol = self.k_bol
+        k_bol = qclSolver.fundamentals["k-bol"]
 
         m_i = self.mass_sub[init]
         m_f = self.mass_sub[fin]
@@ -362,7 +342,7 @@ class qclSolver:
         else:
             skip = 1
 
-        planck = self.planck
+        planck = qclSolver.fundamentals["planck"]
         h = skip * self.step / 10 ** 9
         m_i = self.mass_sub[init]
         m_f = self.mass_sub[fin]
@@ -395,9 +375,9 @@ class qclSolver:
         E_f = self.eigs[fin] * 1.60218e-19
         E_i = self.eigs[init] * 1.60218e-19
 
-        el = self.el
-        planck = self.planck
-        eps0 = self.eps0
+        el = qclSolver.fundamentals["e-charge"]
+        planck = qclSolver.fundamentals["planck"]
+        eps0 = qclSolver.fundamentals["eps0"]
 
         k_f = m_f / m_i * k_i + 2 * m_f * (E_i - E_f) / planck ** 2
 
@@ -415,7 +395,8 @@ class qclSolver:
         theta = np.linspace(0., np.pi, pi_pts)
         th_step = (theta[1] - theta[0])
 
-        k_bol = self.k_bol
+        k_bol = sqclSolver.fundamentals["k-bol"]
+
         qs_s = el ** 2 * (h / skip * dop.sum() / (
                     self.struct.length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be averaged
 
@@ -436,8 +417,8 @@ class qclSolver:
         m_f = self.mass_sub[fin]
         E_f = self.eigs[fin] * 1.60218e-19
         E_i = self.eigs[init] * 1.60218e-19
-        el = self.el
-        planck = self.planck
+        el = qclSolver.fundamentals["e-charge"]
+        planck = qclSolver.fundamentals["planck"]
 
         k_f = m_f / m_i * k_i + 2 * m_f * (E_i - E_f) / planck / planck
 
@@ -483,8 +464,8 @@ class qclSolver:
         m = self.mass_sub[i]
         Emax = self.potential[0] * 1.60218e-19
         E_i = self.eigs[i] * 1.60218e-19
-        planck = self.planck
-        k_bol = self.k_bol
+        planck = qclSolver.fundamentals["planck"]
+        k_bol = qclSolver.fundamentals["k-bol"]
         TE = self.TE
 
         kGrid = np.linspace(0, np.sqrt(2 * m * (Emax - E_i) / planck ** 2), E_pts)
@@ -539,7 +520,8 @@ class qclSolver:
 
     def findOmega(self, i, f):
 
-        planck = self.planck
+        planck = qclSolver.fundamentals["planck"]
+        m0 = qclSolver.fundamentals["m0"]
         U = self.U / 10 ** 7
         side = self.side
         grid = self.grid
@@ -552,7 +534,7 @@ class qclSolver:
         back = np.argwhere(grid <= side + length)[-1][-1]
 
         Ep_coupl = np.append(Ep[:back], Ep[front:])
-        m_coupl = np.append(self.meff[:back], self.meff[front:]) * qclSolver.m0
+        m_coupl = np.append(self.meff[:back], self.meff[front:]) * m0
         v_coupl = np.append(self.potential[:back], self.potential[front:] - U * length) * 1.60218e-19
         h = self.step / 10 ** 9
         n_ap = len(v_coupl) - len(self.psi[:, f])
@@ -563,8 +545,8 @@ class qclSolver:
         der_l = (np.append(psi_l, 0.) - np.append(0., psi_l))[1:] / 2 / h
         der_r = (np.append(psi_r, 0.) - np.append(0., psi_r))[1:] / 2 / h
 
-        m_l = m_coupl * (1 + (E_i - v_coupl / 1.60218e-19) / (m_coupl / qclSolver.m0 * Ep_coupl))
-        m_r = m_coupl * (1 + (E_f - U * grid[back] - v_coupl / 1.60218e-19) / (m_coupl / qclSolver.m0 * Ep_coupl))
+        m_l = m_coupl * (1 + (E_i - v_coupl / 1.60218e-19) / (m_coupl / m0 * Ep_coupl))
+        m_r = m_coupl * (1 + (E_f - U * grid[back] - v_coupl / 1.60218e-19) / (m_coupl / m0 * Ep_coupl))
 
         K_lr = planck ** 2 * h / 2 * (m_l * der_l / m_l * der_r / m_r).sum()
         K_rl = planck ** 2 * h / 2 * (m_r * der_l / m_l * der_r / m_r).sum()
@@ -587,7 +569,7 @@ class qclSolver:
     def Build_R(self):
         eigs = self.eigs
         N = len(eigs)
-        planck = self.planck
+        planck = qclSolver.fundamentals["planck"]
         length = self.struct.length
         mass_sub = self.mass_sub
         Population = self.Population
@@ -616,7 +598,7 @@ class qclSolver:
     Chi = lambda x, TE: np.heaviside(-x, 0) + np.heaviside(x, 0) * np.exp(-np.abs(x) / qclSolver.k_bol / TE)
 
     def sigma_b(delta_ab, N_b, m_b, TE):
-        planck = qclSolver.planck
+        planck = qclSolver.fundamentals["planck"]
         Beta = 1 / qclSolver.k_bol / TE
         D_e = m_b / np.pi / planck ** 2
         mu_b = brentq(lambda mu_t: N_b - D_e / Beta * np.logaddexp(0, Beta * mu_t),
@@ -632,11 +614,12 @@ class qclSolver:
 
     def gain_if(self, i, f, omega):
 
-        eps_0 = self.eps0
-        c = self.c
+        eps_0 = qclSolver.fundamentals["eps0"]
+        c = qclSolver.fundamentals["c"]
         z = self.grid / 10 ** 9
-        el = self.el
-        planck = self.planck
+        el = qclSolver.fundamentals["e-charge"]
+        planck = qclSolver.fundamentals["planck"]
+        k_bol = qclSolver.fundamentals["k-bol"]
         TE = self.TE
 
         m_i = self.mass_sub[i]
@@ -648,7 +631,7 @@ class qclSolver:
         delta = (self.eigs[i] - self.eigs[f]) * 1.60218e-19 - planck * omega
         gamma = -planck * (self.W[f, f]) / 2
 
-        Beta = 1 / self.k_bol / self.TE
+        Beta = 1 / k_bol / self.TE
         D_ei = m_i / np.pi / planck ** 2
         D_ef = m_f / np.pi / planck ** 2
         mu_i = brentq(lambda mu_t: n_i - D_ei / Beta * np.logaddexp(0, Beta * mu_t),
@@ -726,9 +709,9 @@ class qclSolver:
         return self.tot_gain(omega)
 
     def optPower(self, lam):
-
-        planck = self.planck
-        Omega = 2 * np.pi * qclSolver.c / lam
+        c = qclSolver.fundamentals["c"]
+        planck = qclSolver.fundamentals["planck"]
+        Omega = 2 * np.pi * c / lam
         S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 34,xtol=0.01)
 
         self.P = Omega * planck * S * self.periods * self.dim_w * self.alpha_m
@@ -750,9 +733,10 @@ class qclSolver:
 
     def plotGainSP(self, lam_min, lam_max, saveFile = True):
 
+        c = qclSolver.fundamentals["c"]
         lam = np.linspace(lam_min, lam_max, 1000) / 10 ** (6)
 
-        omega_r = 2 * np.pi * qclSolver.c / lam
+        omega_r = 2 * np.pi * c / lam
         gain_r = self.tot_gain(omega_r)
 
         plt.figure(figsize=(10, 5))
