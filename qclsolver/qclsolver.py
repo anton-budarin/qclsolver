@@ -16,7 +16,35 @@ class qclSolver:
     k_bol = 1.38064852 * (10 ** (-23))
     c = 3 * 10 ** 8
 
+    fundamentals = {
+
+        "e-charge": -1.6021766208 * (10 ** (-19)),
+        "planck": 1.054571800 * (10 ** (-34)),
+        "planck_e": 6.582119569 * (10 ** (-16)),
+        "m0": 9.10938356 * (10 ** (-31)),
+        "k-bol": 1.38064852 * (10 ** (-23)),
+        "c": 3 * 10 ** 8,
+        "eps0": 8.85418781762 * (10 ** (-12)),
+
+    }
     def __init__(self, struct, interval=2, step=0.05, side=5., TE=400.):
+
+        params = {
+
+            "step": step,
+            "side": side,
+            "TE": TE,
+            "tau-pure": 0.1 * 10 ** (-12),
+            "periods": 30,
+            "dim_l": 0.3 ,
+            "dim_h": 4. / 10 ** 4,
+            "dim_v": 0.15,
+            "gamma-overlap": 1.,
+            "ref-ind": 3.4,
+
+
+        }
+
 
         self.step = step
         self.struct = struct
@@ -50,21 +78,23 @@ class qclSolver:
 
         self.tau_pure = 0.1 * 10 ** (-12)  # pure dephasing time
 
+
         self.periods = 30
         self.dim_l = 0.3  # cm
         self.dim_h = 4 / 10 ** 4  # cm
         self.dim_w = 0.15  # cm
 
+
         if interval == 2:
             self.refr = 3.4
             self.alpha_m = 7.5
             self.alpha_w = 7.5
-            self.Gamma_overlap = 0.6
+            self.Gamma_overlap = 1
         else:
             self.refr = 3.4
             self.alpha_m = 3.
             self.alpha_w = 3.
-            self.Gamma_overlap = 0.6
+            self.Gamma_overlap = 1
 
         self.evaluate_W = True
         self.TPop = True
@@ -130,7 +160,7 @@ class qclSolver:
 
         return matArray
 
-    def eigDiag(self, ):  # Implement
+    def eigDiag(self, ):  # not implemented
 
         self.eigs = 1
         self.psi = 1
