@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 from scipy.linalg import solve_banded
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool
 from itertools import product
 
 
@@ -251,11 +251,11 @@ class qclSolver:
             self.setPotential(self.U, hart=self.solvePoisson())
             self.eigTM(Resolution)
 
-    def RESolve(self, r_iter=3, Parallel=True):
+    def RESolve(self, r_iter=3, ncpu):
 
         el = qclSolver.fundamentals["e-charge"]
         if self.evaluate_W:
-            self.Build_W(Parallel)
+            self.Build_W(ncpu=ncpu)
             self.evaluate_W = False
 
         W = self.W
@@ -395,7 +395,7 @@ class qclSolver:
         theta = np.linspace(0., np.pi, pi_pts)
         th_step = (theta[1] - theta[0])
 
-        k_bol = sqclSolver.fundamentals["k-bol"]
+        k_bol = qclSolver.fundamentals["k-bol"]
 
         qs_s = el ** 2 * (h / skip * dop.sum() / (
                     self.struct.length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be averaged
@@ -489,11 +489,11 @@ class qclSolver:
 
         return sigma * (I1 + I2 + I3 + I4)
 
-    def Build_W(self, Parallel):
+    def Build_W(self, ncpu=4):
 
-        if Parallel:
+        if ncpu > 1:
 
-            with Pool(processes=cpu_count()) as pool:
+            with Pool(processes=ncpu) as pool:
                 W = pool.starmap(self.w_m, product(range(0, len(self.eigs)), repeat=2))
             W = np.array(W).reshape(len(self.eigs), len(self.eigs))
 
