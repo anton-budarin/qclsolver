@@ -251,7 +251,7 @@ class qclSolver:
             self.setPotential(self.U, hart=self.solvePoisson())
             self.eigTM(Resolution)
 
-    def RESolve(self, r_iter=3, ncpu):
+    def RESolve(self, r_iter=3, ncpu=4):
 
         el = qclSolver.fundamentals["e-charge"]
         if self.evaluate_W:
