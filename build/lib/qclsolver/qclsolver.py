@@ -20,13 +20,13 @@ class qclSolver:
         "eps0": 8.85418781762 * (10 ** (-12)),
 
     }
-    def __init__(self, struct, interval=2, step=0.05, side=5., TE=400.):
+    def __init__(self, struct, interval=2, step=0.05, side=5., TE=400., TL=293.):
 
         self.step = step
         self.struct = struct
         self.side = side
 
-        self.TL = struct.TL
+        self.TL = TL
         self.TE = TE
 
         self.index, self.last = qclSolver.layerExtrap(struct, side)
@@ -50,7 +50,7 @@ class qclSolver:
                 [0, struct.dopings[i][2], 0]
             )
 
-        self.N_carr = step / 10 ** 9 * self.dop.sum() * (10 ** 6)
+        self.N_carr = struct.getSheetDop() * (10 ** 4)
 
         self.tau_pure = 0.1 * 10 ** (-12)  # pure dephasing time
 
@@ -98,7 +98,7 @@ class qclSolver:
             val.append(boundary(E).real)
 
         for i in range(0, np.size(Energy) - 1):
-            if (val[i] * val[i + 1] < 0):
+            if val[i] * val[i + 1] < 0:
                 eig.append(brentq(lambda E: boundary(E).real, Energy[i], Energy[i + 1], xtol=1e-20))
 
         for E in eig:
@@ -252,7 +252,7 @@ class qclSolver:
             self.eigTM(Resolution)
 
     def RESolve(self, r_iter=3, ncpu=4):
-
+        # add integration precision
         el = qclSolver.fundamentals["e-charge"]
         if self.evaluate_W:
             self.Build_W(ncpu=ncpu)
@@ -461,6 +461,8 @@ class qclSolver:
 
     def w_m(self, i, f, E_pts=50):
 
+        # add integration precision
+
         m = self.mass_sub[i]
         Emax = self.potential[0] * 1.60218e-19
         E_i = self.eigs[i] * 1.60218e-19
@@ -490,7 +492,7 @@ class qclSolver:
         return sigma * (I1 + I2 + I3 + I4)
 
     def Build_W(self, ncpu=4):
-
+        # add integration precision
         if ncpu > 1:
 
             with Pool(processes=ncpu) as pool:

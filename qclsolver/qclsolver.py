@@ -20,13 +20,13 @@ class qclSolver:
         "eps0": 8.85418781762 * (10 ** (-12)),
 
     }
-    def __init__(self, struct, interval=2, step=0.05, side=5., TE=400.):
+    def __init__(self, struct, interval=2, step=0.05, side=5., TE=400., TL=293.):
 
         self.step = step
         self.struct = struct
         self.side = side
 
-        self.TL = struct.TL
+        self.TL = TL
         self.TE = TE
 
         self.index, self.last = qclSolver.layerExtrap(struct, side)
@@ -50,7 +50,7 @@ class qclSolver:
                 [0, struct.dopings[i][2], 0]
             )
 
-        self.N_carr = step / 10 ** 9 * self.dop.sum() * (10 ** 6)
+        self.N_carr = struct.getSheetDop() * (10 ** 4)
 
         self.tau_pure = 0.1 * 10 ** (-12)  # pure dephasing time
 
@@ -218,8 +218,8 @@ class qclSolver:
 
         if self.TPop:
             mu = brentq(lambda mu_t: (N_car_tot - qclSolver.TDistr(mass_sub, self.eigs, mu_t, self.TE, self.TL).sum()),
-                        -3,
-                        3,
+                        -1,
+                        1,
                         xtol=1e-30)
             Population = qclSolver.TDistr(mass_sub, self.eigs, mu, self.TE, self.TL)
             self.Population = Population
