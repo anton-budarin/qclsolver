@@ -98,7 +98,7 @@ class qclSolver:
             val.append(boundary(E).real)
 
         for i in range(0, np.size(Energy) - 1):
-            if val[i] * val[i + 1] < 0:
+            if (val[i] * val[i + 1] < 0):
                 eig.append(brentq(lambda E: boundary(E).real, Energy[i], Energy[i + 1], xtol=1e-20))
 
         for E in eig:
@@ -218,8 +218,8 @@ class qclSolver:
 
         if self.TPop:
             mu = brentq(lambda mu_t: (N_car_tot - qclSolver.TDistr(mass_sub, self.eigs, mu_t, self.TE, self.TL).sum()),
-                        -3,
-                        3,
+                        -1,
+                        1,
                         xtol=1e-30)
             Population = qclSolver.TDistr(mass_sub, self.eigs, mu, self.TE, self.TL)
             self.Population = Population
@@ -252,7 +252,7 @@ class qclSolver:
             self.eigTM(Resolution)
 
     def RESolve(self, r_iter=3, ncpu=4):
-        # add integration precision
+
         el = qclSolver.fundamentals["e-charge"]
         if self.evaluate_W:
             self.Build_W(ncpu=ncpu)
@@ -461,8 +461,6 @@ class qclSolver:
 
     def w_m(self, i, f, E_pts=50):
 
-        # add integration precision
-
         m = self.mass_sub[i]
         Emax = self.potential[0] * 1.60218e-19
         E_i = self.eigs[i] * 1.60218e-19
@@ -492,7 +490,7 @@ class qclSolver:
         return sigma * (I1 + I2 + I3 + I4)
 
     def Build_W(self, ncpu=4):
-        # add integration precision
+
         if ncpu > 1:
 
             with Pool(processes=ncpu) as pool:
