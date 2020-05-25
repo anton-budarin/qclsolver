@@ -20,8 +20,8 @@ class qclSolver:
         "eps0": 8.85418781762 * (10 ** (-12)),
 
     }
-    def __init__(self, struct, interval=2, step=0.05, side=5., TE=400., TL=293.):
-
+    def __init__(self, struct, interval=2, step=0.05, istep=0.2, side=5., TE=400., TL=293.):
+        self.istep = istep
         self.step = step
         self.struct = struct
         self.side = side
@@ -281,8 +281,8 @@ class qclSolver:
     # =============== SCATTERING =================
     # ============================================
 
-    def w_lo_ph(self, k_i, init, fin, pi_pts=150, istep=0.2):
-
+    def w_lo_ph(self, k_i, init, fin, pi_pts=150):
+        istep = self.istep
         if istep > self.step:
             skip = np.around(istep / self.step).astype(int)
         else:
@@ -335,8 +335,9 @@ class qclSolver:
 
         return w_a + w_e
 
-    def w_ad(self, k_i, init, fin, istep=0.2):
-
+    def w_ad(self, k_i, init, fin):
+        
+        istep = self.istep
         if istep > self.step:
             skip = np.around(istep / self.step).astype(int)
         else:
@@ -362,8 +363,8 @@ class qclSolver:
 
         return w
 
-    def w_dop(self, k_i, init, fin, pi_pts=150, istep=0.2):
-
+    def w_dop(self, k_i, init, fin, pi_pts=150):
+        istep = self.istep
         if istep > self.step:
             skip = np.around(istep / self.step).astype(int)
         else:
@@ -710,6 +711,16 @@ class qclSolver:
             self.Population = Population
 
         return self.tot_gain(omega)
+
+    def findMaxGain(self, lam_min, lam_max):
+
+        c = qclSolver.fundamentals["c"]
+        lam = np.linspace(lam_min, lam_max, 1000) / 10 ** (6)
+
+        omega_r = 2 * np.pi * c / lam
+        gain_r = self.tot_gain(omega_r)
+        return lam[np.argmax(gain_r)], np.amax(gain_r)
+
 
     def optPower(self, lam):
         c = qclSolver.fundamentals["c"]
