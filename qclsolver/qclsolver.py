@@ -725,10 +725,20 @@ class qclSolver:
     def optPower(self, lam):
         c = qclSolver.fundamentals["c"]
         planck = qclSolver.fundamentals["planck"]
+        el =  qclSolver.fundamentals["e-charge"]
+
         Omega = 2 * np.pi * c / lam
         S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 34,xtol=0.01)
 
         self.P = Omega * planck * S * self.periods * self.dim_w * self.alpha_m
+
+        R_1, R_2 = self.Build_R()
+        for i in range(0, len(self.eigs)):
+            R_1[i, i] = 0
+            R_2[i, i] = 0
+
+        self.J_opt = -el * (np.sum(R_1 - R_2, axis=1) * population).sum()
+
 
     # ============================================
     # ================= OUTPUT ===================
