@@ -737,8 +737,7 @@ class qclSolver:
             R_1[i, i] = 0
             R_2[i, i] = 0
 
-        self.J_opt = -el * (np.sum(R_1 - R_2, axis=1) * population).sum()
-
+        self.J_opt = -el * (np.sum(R_1 - R_2, axis=1) * self.Population).sum()
 
     # ============================================
     # ================= OUTPUT ===================
