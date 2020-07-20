@@ -21,6 +21,9 @@ class qclSolver:
 
     }
     def __init__(self, struct, interval=2, step=0.05, istep=0.2, side=5., TE=400., TL=293.):
+        
+        struct.length = np.array([struct.layers[iind].width for iind in range(0, len(struct.layers))]).sum()
+
         self.istep = istep
         self.step = step
         self.struct = struct
@@ -39,6 +42,8 @@ class qclSolver:
         self.lattconst = np.array(
             [(self.struct.layers[int(self.index(z))].material.params['lattconst']) for z in self.grid])
         self.comp = np.array([(self.struct.layers[int(self.index(z))].material.x) for z in self.grid])
+        self.comp[self.comp == None] = 0
+
         self.Ep = np.array([(self.struct.layers[int(self.index(z))].material.params['Ep']) for z in self.grid])
 
         self.dop = 0.
@@ -247,9 +252,10 @@ class qclSolver:
 
     def SPSolve(self, Resolution=10 ** (-3), iteration=3):
         self.eigTM(Resolution)
-        for i in range(0, iteration):
-            self.setPotential(self.U, hart=self.solvePoisson())
-            self.eigTM(Resolution)
+        if iteration > 0 :
+            for i in range(0, iteration):
+                self.setPotential(self.U, hart=self.solvePoisson())
+                self.eigTM(Resolution)
 
     def RESolve(self, r_iter=3, ncpu=4):
         # add integration precision
@@ -276,6 +282,7 @@ class qclSolver:
         self.J_d = -el * (np.sum(R_1 - R_2, axis=1) * population).sum()
         self.Population = population
         self.TPop = False
+
 
     # ============================================
     # =============== SCATTERING =================
@@ -721,7 +728,6 @@ class qclSolver:
         gain_r = self.tot_gain(omega_r)
         return lam[np.argmax(gain_r)], np.amax(gain_r)
 
-
     def optPower(self, lam):
         c = qclSolver.fundamentals["c"]
         planck = qclSolver.fundamentals["planck"]
@@ -781,10 +787,11 @@ class qclSolver:
     def generateParOutput(self):
 
         print(self.eigs)
-        if not self.evaluate_W :
-            print('States Populations:',self.Population)
+        if not self.evaluate_W:
+            print('State populations:',self.Population)
             print('Current density:', round(self.J_d / 1000, 3), 'kA/cm^2')
             if self.P > 0 :
+                print('Optical Current Density:', self.J_opt / 1000, 'kA/cm^2')
                 print('Optical Power:', self.P / 1000, 'mWt')
 
     def generatePlotOutput(self, lam_min = None, lam_max = None, saveFile = True):
@@ -795,3 +802,13 @@ class qclSolver:
                 self.plotGainSP(lam_min=lam_min, lam_max=lam_max, saveFile=saveFile)
 
 
+    # ============================================
+    # ================== MISC ====================
+    # ============================================
+
+    def findLifeTimes(self, ncpu=1):
+        if self.evaluate_W:
+            self.Build_W(ncpu=ncpu)
+            self.evaluate_W = False
+
+        return np.diag(-1/self.W)
