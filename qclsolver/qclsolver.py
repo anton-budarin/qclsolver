@@ -2,13 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
-from scipy.linalg import solve_banded
+from scipy.linalg import solve_banded, block_diag
 from multiprocessing import Pool
 from itertools import product
+from functools import partial
 
 
 class qclSolver:
-
     fundamentals = {
 
         "e-charge": -1.6021766208 * (10 ** (-19)),
@@ -20,9 +20,14 @@ class qclSolver:
         "eps0": 8.85418781762 * (10 ** (-12)),
 
     }
+
     def __init__(self, struct, interval=2, step=0.05, istep=0.2, side=5., TE=400., TL=293.):
-        
-        struct.length = np.array([struct.layers[iind].width for iind in range(0, len(struct.layers))]).sum()
+
+        if not (isinstance(struct, list)):
+            struct = [struct]
+
+        for i in range(0, len(struct)):
+            struct[i].length = np.array([struct[i].layers[ind].width for ind in range(0, len(struct[i].layers))]).sum()
 
         self.istep = istep
         self.step = step
@@ -32,39 +37,100 @@ class qclSolver:
         self.TL = TL
         self.TE = TE
 
-        self.index, self.last = qclSolver.layerExtrap(struct, side)
-        self.grid = np.arange(0, self.last, step)
+        self.index = []
+        self.grid = []
+        self.meff = []
+        self.Valloy = []
+        self.Perm = []
+        self.lattconst = []
+        self.comp = []
+        self.Ep = []
+        self.Population = []
 
-        self.meff = np.array([(struct.layers[int(self.index(z))].material.params['meff']) for z in self.grid])
-        self.Valloy = np.array([(struct.layers[int(self.index(z))].material.params['Valloy']) for z in self.grid])
-        self.Perm = np.array(
-            [(self.struct.layers[int(self.index(z))].material.params['eps0']) for z in self.grid]) * qclSolver.fundamentals["eps0"]
-        self.lattconst = np.array(
-            [(self.struct.layers[int(self.index(z))].material.params['lattconst']) for z in self.grid])
-        self.comp = np.array([(self.struct.layers[int(self.index(z))].material.x) for z in self.grid])
-        self.comp[self.comp == None] = 0
+        self.U = 0
+        self.potential = []
 
-        self.Ep = np.array([(self.struct.layers[int(self.index(z))].material.params['Ep']) for z in self.grid])
+        self.shifts = side * np.ones(len(struct))
+        self.ends = np.zeros_like(self.shifts)
+        self.N_carr = 0
+        self.struct_end = []
 
-        self.dop = 0.
-        for i in range(0, len(struct.dopings)):
-            self.dop += np.piecewise(
-                self.grid, [self.grid < struct.dopings[i][0],
-                            self.grid >= struct.dopings[i][0],
-                            self.grid >= struct.dopings[i][1]],
-                [0, struct.dopings[i][2], 0]
-            )
+        self.eigs = []
+        self.psi = []
+        self.dop = []
 
-        self.N_carr = struct.getSheetDop() * (10 ** 4)
+        # chunk division
+
+        for i in range(0, len(struct)):
+
+            # index interpolation
+
+            self.shifts[i] = self.shifts[i] - struct[i].layers[0].width
+
+            if i == 0:
+                index, last, end = qclSolver.layerExtrap(struct[i], side)
+                self.grid.append(np.arange(0, last, step))
+            else:
+                index, last, end = qclSolver.layerExtrap(struct[i], side, z_start=end)
+                self.grid.append(np.arange(self.grid[i - 1][-1] - 2 * side // step * step, last, step))
+            self.struct_end.append(end)
+            self.index.append(index)
+
+            # parameter grid filling
+
+            self.meff.append(np.array([(struct[i].layers[int(self.index[i](z))].material.params['meff'])
+                                       for z in self.grid[i]]))
+
+            self.Valloy.append(np.array([(struct[i].layers[int(self.index[i](z))].material.params['meff'])
+                                         for z in self.grid[i]]))
+
+            self.Perm.append(np.array([(self.struct[i].layers[int(self.index[i](z))].material.params['eps0'])
+                                       for z in self.grid[i]]) * qclSolver.fundamentals["eps0"])
+
+            self.lattconst.append(np.array([(self.struct[i].layers[int(self.index[i](z))].material.params['lattconst'])
+                                            for z in self.grid[i]]))
+
+            self.comp.append(np.array([self.struct[i].layers[int(self.index[i](z))].material.x for z in self.grid[i]]))
+
+            self.comp[i][self.comp is None] = 0
+
+            self.Ep.append(np.array([(self.struct[i].layers[int(self.index[i](z))].material.params['Ep'])
+                                     for z in self.grid[i]]))
+
+            # doping processing
+
+            self.N_carr += struct[i].getSheetDop() * (10 ** 4)
+
+            dop = 0.
+            if i == 0:
+                shift = self.shifts[0]
+                for j in range(0, len(struct[i].dopings)):
+                    dop += np.piecewise(
+                        self.grid[i], [self.grid[i]-shift < struct[i].dopings[j][0],
+                                    self.grid[i]-shift >= struct[i].dopings[j][0],
+                                    self.grid[i]-shift >= struct[i].dopings[j][1]],
+                        [0, struct[i].dopings[j][2], 0]
+                    )
+            else:
+                shift = self.struct_end[i-1]
+                for j in range(0, len(struct[i].dopings)):
+                    dop += np.piecewise(
+                        self.grid[i], [self.grid[i]-shift < struct[i].dopings[j][0],
+                                    self.grid[i]-shift >= struct[i].dopings[j][0],
+                                    self.grid[i]-shift >= struct[i].dopings[j][1]],
+                        [0, struct[i].dopings[j][2], 0]
+                    )
+
+            self.dop.append(dop)
+
+        # various parameters
 
         self.tau_pure = 0.1 * 10 ** (-12)  # pure dephasing time
-
 
         self.periods = 30
         self.dim_l = 0.3  # cm
         self.dim_h = 4 / 10 ** 4  # cm
         self.dim_w = 0.15  # cm
-
 
         if interval == 2:
             self.refr = 3.4
@@ -86,38 +152,43 @@ class qclSolver:
     # ============================================
 
     def eigTM(self, resolution=10 ** (-3)):
-        m = self.meff * qclSolver.fundamentals["m0"]
+
         step = self.step / 10 ** 9
-        Ep = self.Ep
 
-        Energy = np.arange(np.amin(self.potential), np.amax(self.potential), resolution)
-        boundary = lambda E: np.dot(qclSolver.buildTM(E, self.potential, Ep, m, step)[:, :, -1], [1, -1]).sum()
+        for i in range(0, len(self.struct)):
 
-        val = []
-        eig = []
-        psi = []
+            m = self.meff[i] * qclSolver.fundamentals["m0"]
+            Ep = self.Ep[i]
 
-        old_settings = np.seterr(all='ignore')
+            Energy = np.arange(np.amin(self.potential[i]), np.amax(self.potential[i]), resolution)
+            boundary = lambda E: np.dot(qclSolver.buildTM(E, self.potential[i], Ep, m, step)[:, :, -1], [1, -1]).sum()
 
-        for E in Energy:
-            val.append(boundary(E).real)
+            val = []
+            eig = []
+            psi = []
 
-        for i in range(0, np.size(Energy) - 1):
-            if val[i] * val[i + 1] < 0:
-                eig.append(brentq(lambda E: boundary(E).real, Energy[i], Energy[i + 1], xtol=1e-20))
+            old_settings = np.seterr(all='ignore')
 
-        for E in eig:
-            matArray = qclSolver.buildTM(E, self.potential, Ep, m, step)
-            psi_tmp = np.sum(np.matmul(np.transpose(matArray, (2, 0, 1)), [1, -1]), axis=1).real
-            nrm = ((psi_tmp ** 2).sum() * step)
-            psi_tmp = psi_tmp / np.sqrt(nrm)
+            for E in Energy:
+                val.append(boundary(E).real)
 
-            psi.append(np.append(0., psi_tmp))
+            for j in range(0, np.size(Energy) - 1):
+                if val[j] * val[j + 1] < 0:
+                    eig.append(brentq(lambda E: boundary(E).real, Energy[j], Energy[j + 1], xtol=1e-20))
 
-        np.seterr(**old_settings)
+            for E in eig:
+                matArray = qclSolver.buildTM(E, self.potential[i], Ep, m, step)
+                psi_tmp = np.sum(np.matmul(np.transpose(matArray, (2, 0, 1)), [1, -1]), axis=1).real
+                nrm = ((psi_tmp ** 2).sum() * step)
+                psi_tmp = psi_tmp / np.sqrt(nrm)
 
-        self.eigs = np.array(eig)[::-1]
-        self.psi = (np.array(psi)[::-1][:]).transpose()
+                psi.append(np.append(0., psi_tmp))
+
+            np.seterr(**old_settings)
+
+            self.eigs.append(np.array(eig)[::-1])
+            self.psi.append((np.array(psi)[::-1][:]).transpose())
+
         self.selectPsi()
 
     def buildTM(E, Ev, Ep, m, step):
@@ -151,90 +222,170 @@ class qclSolver:
         return 0
 
     # ============================================
-    # ================ TECHNICAL =================
+    # =================== MISC ===================
     # ============================================
 
-    def layerExtrap(struct, side=5.):
+    def layerExtrap(struct, side=5., z_start=0.):
         shift = side - struct.layers[0].width
         length = struct.length + shift
         z = np.array([struct.layerPos(i) + shift for i in range(0, struct.Nl)] + [length] + [length + side])
         n = np.arange(0, struct.Nl + 2, 1)
-        z[0] = 0.
+        z[0] = -0.01-struct.layers[0].width
         n[-2:] = 0
-        return interp1d(z, n, kind='previous'), z[-1]
+        if z_start != 0.:
+            z = z + z_start - shift
+        return interp1d(z, n, kind='previous'), z[-1], z[-2]
 
     def setPotential(self, U, hart=0.):
         self.U = U
-        self.potential = np.array(
-            [(self.struct.layers[int(self.index(z))].material.params['Ec']) for z in
-             self.grid]) - U * self.grid / 10 ** 7 + hart
+        self.potential = []
+        for i in range(0, len(self.struct)):
+            self.potential.append(np.array(
+                [(self.struct[i].layers[int(self.index[i](z))].material.params['Ec']) for z in self.grid[i]])
+                                  - U * self.grid[i] / 10 ** 7)
+            if not np.all(hart == 0.):
+                front = np.argwhere(self.unified_grid <= self.grid[i][0])[-1][-1]
+                back = np.argwhere(self.unified_grid <= self.grid[i][-1])[-1][-1]
+                self.potential[-1] += hart[front:back+1]
 
     def setBGDoping(self, BGDoping):
+        for chunk in range(0, len(self.struct)):
+            self.dop[chunk][self.dop == 0] += BGDoping
 
-        self.dop[self.dop > 0] += -BGDoping
-        self.dop += BGDoping
-
-        self.alpha_w *= self.step / 10 ** 9 * self.dop.sum() * (10 ** 6) / self.N_carr
-        self.N_carr = self.step / 10 ** 9 * self.dop.sum() * (10 ** 6)
+            self.alpha_w *= self.step / 10 ** 9 * self.dop[chunk].sum() * (10 ** 6) / self.N_carr
+            self.N_carr = self.step / 10 ** 9 * self.dop[chunk].sum() * (10 ** 6)
 
     def selectPsi(self, deloc_ext=1):
+        self.mass_sub = []
         step = self.step / 10 ** 9
-        eigs = self.eigs
-        psi = self.psi
-        potential = self.potential
         U = self.U / 10 ** 7
-        ind = np.zeros(0, dtype=int)
-        Ep = self.Ep
+        eigs_list = self.eigs
+        psi_list = self.psi
+        psi_out = []
+        eigs_out = []
 
-        for i in range(0, len(eigs)):
-            if eigs[i] > potential[-1]:
-                left = (psi[np.nonzero(potential[0] - U * self.grid - eigs[i] > 0), i] ** 2).sum()
-                right = (psi[np.nonzero(eigs[i] - potential[0] + U * self.grid > 0), i] ** 2).sum()
-                if left < deloc_ext * right:
-                    ind = np.append(ind, i)
+        for j in range(0, len(self.struct)):
 
-        eigs = np.delete(eigs, ind)
-        psi = np.delete(psi, ind, 1)
+            eigs = eigs_list[j]
+            psi = psi_list[j]
+            potential = self.potential[j]
+            ind = np.zeros(0, dtype=int)
+            Ep = self.Ep[j]
 
-        mass_sub = np.zeros_like(eigs)
+            for i in range(0, len(eigs)):
+                if eigs[i] > potential[-1]:
+                    left = (psi[np.nonzero(potential[0] - U * self.grid[j] - eigs[i] > 0), i] ** 2).sum()
+                    right = (psi[np.nonzero(eigs[i] - potential[0] + U * self.grid[j] > 0), i] ** 2).sum()
+                    if left < deloc_ext * right:
+                        ind = np.append(ind, i)
 
-        for i in range(0, len(eigs)):
-            mass_sub[i] = step * (
-                        self.meff * (1 + (eigs[i] - self.potential) / self.meff / Ep) * (psi[:, i] ** 2)).sum()
+            eigs = np.delete(eigs, ind)
+            psi = np.delete(psi, ind, 1)
 
-        self.eigs, self.psi, self.mass_sub = eigs, psi, mass_sub * qclSolver.fundamentals["m0"]
+            mass_sub = np.zeros_like(eigs)
 
+            for i in range(0, len(eigs)):
+                mass_sub[i] = step * (
+                        self.meff[j] * (1 + (eigs[i] - potential) / self.meff[j] / Ep) * (psi[:, i] ** 2)).sum()
+
+            eigs_out.append(eigs)
+            psi_out.append(psi)
+            self.mass_sub.append(mass_sub * qclSolver.fundamentals["m0"])
+        self.eigs = eigs_out
+        self.psi = psi_out
+
+    def unite_chunks(self):
+        front, back = [], []
+
+        front.append(0)
+        back.append(np.argwhere(self.grid[0] <= self.struct_end[0])[-1][-1])
+
+        for i in range(1, len(self.struct)-1):
+            back.append(np.argwhere(self.grid[i] <= self.struct_end[i])[-1][-1])
+            front.append(np.argwhere(self.grid[i] <= self.struct_end[i - 1])[-1][-1])
+
+        back.append(len(self.grid[-1]))
+        front.append(np.argwhere(self.grid[-1] <= self.struct_end[-2])[-1][-1])
+
+        unified_potential = np.zeros(0)
+        unified_dop = np.zeros(0)
+        unified_grid = np.zeros(0)
+        unified_perm = np.zeros(0)
+
+        unified_eigs = np.zeros(0)
+        unified_mass_sub = np.zeros(0)
+
+        unified_psi = np.array(self.psi)
+
+        for i in range(0, len(self.struct)):
+            for k in range(0, len(self.struct)):
+                if k < i:
+                    unified_psi[i] = np.append(
+                        np.zeros([len(self.grid[k][front[k]:back[k]]), len(self.eigs[i])]), unified_psi[i], axis=0)
+                elif k > i:
+                    unified_psi[i] = np.append(
+                        unified_psi[i], np.zeros([len(self.grid[k][front[k]:back[k]]), len(self.eigs[i])]), axis=0)
+
+        for i in range(0, len(self.struct)):
+
+            unified_potential = np.append(unified_potential, self.potential[i][front[i]:back[i]])
+            unified_dop = np.append(unified_dop, self.dop[i][front[i]:back[i]])
+            unified_grid = np.append(unified_grid, self.grid[i][front[i]:back[i]])
+            unified_perm = np.append(unified_perm, self.Perm[i][front[i]:back[i]])
+
+            unified_eigs = np.append(unified_eigs, self.eigs[i])
+            unified_mass_sub = np.append(unified_mass_sub, self.mass_sub[i])
+
+            unified_psi[i] = unified_psi[i][front[i]:back[i]-len(self.grid[i])-1, :]
+
+        self.unified_grid = unified_grid[:-1]
+        self.unified_potential = unified_potential[:-1]
+        self.unified_dop = unified_dop[:-1]
+        self.unified_perm = unified_perm[:-1]
+        self.unified_psi = np.hstack(unified_psi)
+        self. unified_eigs = unified_eigs
+        self.unified_mass_sub = unified_mass_sub
+
+    # ============================================
+    # ============ GENERAL SOLVERS ===============
     # ============================================
 
     def solvePoisson(self):
         h = self.step / 10 ** 9
         side = self.side / 10 ** 9
-        z = self.grid / 10 ** 9
+        z = self.unified_grid / 10 ** 9
         el = qclSolver.fundamentals["e-charge"]
         N = len(z)
-        mass_sub = self.mass_sub
-
-        Perm = self.Perm
+        mass_sub = self.unified_mass_sub
+        Perm = self.unified_perm
+        eigs = self.unified_eigs
+        psi = self.unified_psi
 
         N_car_tot = self.N_carr
 
-        front = np.argwhere(z <= side)[-1][-1]
-        back = np.argwhere(z <= side + self.struct.length / 10 ** 9)[-1][-1]
+        front = np.argwhere(z <= side)[-1][-1] - 1
+        back = np.argwhere(z <= (self.struct_end[-1] + self.struct[0].layers[0].width) / 10 ** 9)[-1][-1]
 
         if self.TPop:
-            mu = brentq(lambda mu_t: (N_car_tot - qclSolver.TDistr(mass_sub, self.eigs, mu_t, self.TE, self.TL).sum()),
+            mu = brentq(lambda mu_t: (N_car_tot - qclSolver.TDistr(mass_sub, eigs, mu_t, self.TE, self.TL).sum()),
                         -1,
                         1,
                         xtol=1e-30)
-            Population = qclSolver.TDistr(mass_sub, self.eigs, mu, self.TE, self.TL)
-            self.Population = Population
-        else:
-            Population = self.Population
 
-        f_carr = self.psi ** 2 * Population[np.newaxis, :]
+            Population = qclSolver.TDistr(mass_sub, eigs, mu, self.TE, self.TL)
+
+            self.Population = []
+            end = 0
+            for i in range(0, len(self.struct)):
+                self.Population.append(Population[end:end+len(self.eigs[i])])
+                end += len(self.eigs[i])
+        else:
+            Population = np.concatenate(self.Population)
+
+        f_carr = psi ** 2 * Population[np.newaxis, :]
         f_carr = np.sum(f_carr, axis=1)
 
-        Ro_n = -el * (self.dop[front:back] * (10 ** 6) - f_carr[front:back])
+        Ro_n = -el * (self.unified_dop[front:back] * (10 ** 6) - f_carr[front:back])
 
         s_n = 1 / 2 / el / h / h * (Perm[front - 1:back - 1] + Perm[front:back])
         d_n = -1 / 2 / el / h / h * (Perm[front - 1:back - 1] + 2 * Perm[front:back] + Perm[front + 1:back + 1])
@@ -251,20 +402,27 @@ class qclSolver:
         return m / np.pi / planck / planck * k * TL * np.logaddexp(0, (mu - E) * 1.60218e-19 / k / TE)
 
     def SPSolve(self, Resolution=10 ** (-3), iteration=3):
-        self.eigTM(Resolution)
-        if iteration > 0 :
-            for i in range(0, iteration):
-                self.setPotential(self.U, hart=self.solvePoisson())
-                self.eigTM(Resolution)
 
-    def RESolve(self, r_iter=3, ncpu=4):
+        self.eigTM(Resolution)
+        self.unite_chunks()
+        if self.N_carr != 0:
+            if iteration > 0:
+                for i in range(0, iteration):
+                    self.setPotential(self.U, hart=self.solvePoisson())
+                    self.eigTM(Resolution)
+
+    def RESolve(self, r_iter=9, ncpu=4):
         # add integration precision
         el = qclSolver.fundamentals["e-charge"]
         if self.evaluate_W:
             self.Build_W(ncpu=ncpu)
             self.evaluate_W = False
 
-        W = self.W
+        for i in range(0, len(self.struct)):
+            if i == 0:
+                W = self.W[i]
+            else:
+                W = block_diag(W, self.W[i])
 
         for i in range(0, r_iter):
             R_1, R_2 = self.Build_R()
@@ -275,20 +433,23 @@ class qclSolver:
             population = population[1][:, ind]
             population = population.real / (population.real.sum()) * self.N_carr / 10 ** 4
 
-        for i in range(0, len(self.eigs)):
-            R_1[i, i] = 0
-            R_2[i, i] = 0
+        self.Population = []
+        end = 0
+        for i in range(0, len(self.struct)):
+            self.Population.append(population[end:end + len(self.eigs[i])])
+            end += len(self.eigs[i])
 
-        self.J_d = -el * (np.sum(R_1 - R_2, axis=1) * population).sum()
-        self.Population = population
         self.TPop = False
 
+        R_1, R_2 = self.Build_R_local(len(self.struct) - 1, 0)
+        self.J_d = -el * ((R_1 * self.Population[len(self.struct) - 1][:, np.newaxis]).sum()
+                          - (R_2 * self.Population[0][:, np.newaxis]).sum())
 
     # ============================================
     # =============== SCATTERING =================
     # ============================================
 
-    def w_lo_ph(self, k_i, init, fin, pi_pts=150):
+    def w_lo_ph(self, k_i, init, fin, chunk, pi_pts=150):
         istep = self.istep
         if istep > self.step:
             skip = np.around(istep / self.step).astype(int)
@@ -301,25 +462,25 @@ class qclSolver:
         el = qclSolver.fundamentals["e-charge"]
         planck = qclSolver.fundamentals["planck"]
         eps0 = qclSolver.fundamentals["eps0"]
-        E_lo = self.struct.layers[0].material.params['ELO'] * 1.60218e-19
-        perm0 = self.struct.layers[0].material.params['eps0']
-        perm_inf = self.struct.layers[0].material.params['epsinf']
+        E_lo = self.struct[chunk].layers[0].material.params['ELO'] * 1.60218e-19
+        perm0 = self.struct[chunk].layers[0].material.params['eps0']
+        perm_inf = self.struct[chunk].layers[0].material.params['epsinf']
         k_bol = qclSolver.fundamentals["k-bol"]
 
-        m_i = self.mass_sub[init]
-        m_f = self.mass_sub[fin]
-        E_f = self.eigs[fin] * 1.60218e-19
-        E_i = self.eigs[init] * 1.60218e-19
+        m_i = self.mass_sub[chunk][init]
+        m_f = self.mass_sub[chunk][fin]
+        E_f = self.eigs[chunk][fin] * 1.60218e-19
+        E_i = self.eigs[chunk][init] * 1.60218e-19
 
-        qs_s = el ** 2 * (h / skip * self.dop.sum() * 10 ** 6 / (
-                    self.struct.length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be avareged
+        qs_s = el ** 2 * (h / skip * self.dop[chunk].sum() * 10 ** 6 / (
+                self.struct[chunk].length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be avareged
 
         k_f_a = m_f / m_i * k_i + 2 * m_f * (E_i - E_f + E_lo) / planck ** 2
         k_f_e = m_f / m_i * k_i + 2 * m_f * (E_i - E_f - E_lo) / planck ** 2
 
-        Psi_i = self.psi[::skip, init]
-        Psi_f = self.psi[::skip, fin]
-        z = self.grid[::skip] / 10 ** 9
+        Psi_i = self.psi[chunk][::skip, init]
+        Psi_f = self.psi[chunk][::skip, fin]
+        z = self.grid[chunk][::skip] / 10 ** 9
 
         # ------------------------
         I_e = 0
@@ -336,14 +497,14 @@ class qclSolver:
                     -q_a[i] * np.abs(z - z[:, np.newaxis]))).sum()
 
         w_e = m_f * (el ** 2) * E_lo / 4 / np.pi / (planck ** 3) / eps0 * (1 / perm_inf - 1 / perm0) * (
-                    1 / (np.exp(E_lo / k_bol / self.TL) - 1) + 1) * I_e
+                1 / (np.exp(E_lo / k_bol / self.TL) - 1) + 1) * I_e
         w_a = m_f * (el ** 2) * E_lo / 4 / np.pi / (planck ** 3) / eps0 * (1 / perm_inf - 1 / perm0) * (
-                    1 / (np.exp(E_lo / k_bol / self.TL) - 1)) * I_a
+                1 / (np.exp(E_lo / k_bol / self.TL) - 1)) * I_a
 
         return w_a + w_e
 
-    def w_ad(self, k_i, init, fin):
-        
+    def w_ad(self, k_i, init, fin, chunk):
+
         istep = self.istep
         if istep > self.step:
             skip = np.around(istep / self.step).astype(int)
@@ -352,25 +513,25 @@ class qclSolver:
 
         planck = qclSolver.fundamentals["planck"]
         h = skip * self.step / 10 ** 9
-        m_i = self.mass_sub[init]
-        m_f = self.mass_sub[fin]
-        E_f = self.eigs[fin] * 1.60218e-19
-        E_i = self.eigs[init] * 1.60218e-19
+        m_i = self.mass_sub[chunk][init]
+        m_f = self.mass_sub[chunk][fin]
+        E_f = self.eigs[chunk][fin] * 1.60218e-19
+        E_i = self.eigs[chunk][init] * 1.60218e-19
 
         if E_i + k_i * planck ** 2 / 2 / m_i - E_f < 0:
             return 0
 
-        Psi_i = self.psi[::skip, init]
-        Psi_f = self.psi[::skip, fin]
-        Valloy = self.Valloy[::skip] * 1.60218e-19
-        a = self.lattconst[::skip] / 10 ** 10
-        x = self.comp[::skip]
+        Psi_i = self.psi[chunk][::skip, init]
+        Psi_f = self.psi[chunk][::skip, fin]
+        Valloy = self.Valloy[chunk][::skip] * 1.60218e-19
+        a = self.lattconst[chunk][::skip] / 10 ** 10
+        x = self.comp[chunk][::skip]
 
         w = h * m_f / 8 / planck ** 3 * (a ** 3 * Valloy ** 2 * x * (1 - x) * Psi_i ** 2 * Psi_f ** 2).sum()
 
         return w
 
-    def w_dop(self, k_i, init, fin, pi_pts=150):
+    def w_dop(self, k_i, init, fin, chunk, pi_pts=150):
         istep = self.istep
         if istep > self.step:
             skip = np.around(istep / self.step).astype(int)
@@ -378,10 +539,10 @@ class qclSolver:
             skip = 1
 
         h = skip * self.step / 10 ** 9
-        m_i = self.mass_sub[init]
-        m_f = self.mass_sub[fin]
-        E_f = self.eigs[fin] * 1.60218e-19
-        E_i = self.eigs[init] * 1.60218e-19
+        m_i = self.mass_sub[chunk][init]
+        m_f = self.mass_sub[chunk][fin]
+        E_f = self.eigs[chunk][fin] * 1.60218e-19
+        E_i = self.eigs[chunk][init] * 1.60218e-19
 
         el = qclSolver.fundamentals["e-charge"]
         planck = qclSolver.fundamentals["planck"]
@@ -392,13 +553,13 @@ class qclSolver:
         if k_f < 0:
             return 0
 
-        Psi_i = self.psi[::skip, init]
-        Psi_f = self.psi[::skip, fin]
-        z = self.grid[::skip] / 10 ** 9
-        dop = self.dop * 10 ** 6  # skip?
+        Psi_i = self.psi[chunk][::skip, init]
+        Psi_f = self.psi[chunk][::skip, fin]
+        z = self.grid[chunk][::skip] / 10 ** 9
+        dop = self.dop[chunk] * 10 ** 6  # skip?
 
-        perm0 = self.struct.layers[1].material.params['eps0']
-        Perm = self.Perm
+        perm0 = self.struct[chunk].layers[1].material.params['eps0']
+        Perm = self.Perm[chunk]
 
         theta = np.linspace(0., np.pi, pi_pts)
         th_step = (theta[1] - theta[0])
@@ -406,26 +567,25 @@ class qclSolver:
         k_bol = qclSolver.fundamentals["k-bol"]
 
         qs_s = el ** 2 * (h / skip * dop.sum() / (
-                    self.struct.length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be averaged
+                self.struct[chunk].length / 10 ** 9)) / eps0 / perm0 / k_bol / self.TE  # perm0 should be averaged
 
         q = np.sqrt(k_f + k_i - 2 * np.sqrt(k_f) * np.sqrt(k_i) * np.cos(theta) + qs_s)
         I = 0
 
         for i in range(0, pi_pts):
             I += h ** 2 / skip / q[i] ** 2 * th_step * (dop[dop > 0] / (Perm[dop > 0]) ** 2 * (
-                np.sum((Psi_i * Psi_f) * np.exp(-q[i] * np.abs(z - self.grid[dop > 0, np.newaxis] / 10 ** 9)),
+                np.sum((Psi_i * Psi_f) * np.exp(-q[i] * np.abs(z - self.grid[chunk][dop > 0, np.newaxis] / 10 ** 9)),
                        axis=1)) ** 2).sum()
 
         w = m_f * el ** 4 / 4 / np.pi / planck ** 3 * eps0 * I
         return w
 
-    def w_ifr(self, k_i, init, fin, pi_pts=300, kappa=1.5):
+    def w_ifr(self, k_i, init, fin, chunk, pi_pts=300, kappa=1.5):
 
-        m_i = self.mass_sub[init]
-        m_f = self.mass_sub[fin]
-        E_f = self.eigs[fin] * 1.60218e-19
-        E_i = self.eigs[init] * 1.60218e-19
-        el = qclSolver.fundamentals["e-charge"]
+        m_i = self.mass_sub[chunk][init]
+        m_f = self.mass_sub[chunk][fin]
+        E_f = self.eigs[chunk][fin] * 1.60218e-19
+        E_i = self.eigs[chunk][init] * 1.60218e-19
         planck = qclSolver.fundamentals["planck"]
 
         k_f = m_f / m_i * k_i + 2 * m_f * (E_i - E_f) / planck / planck
@@ -434,9 +594,9 @@ class qclSolver:
             return 0
 
         h = self.step / 10 ** 9
-        Delta = self.struct.eta / 10 ** 9  # нм -> м
-        Lambda = self.struct.lam / 10 ** 9  # нм -> м
-        potential = self.potential * 1.60218e-19
+        Delta = self.struct[chunk].eta / 10 ** 9  # нм -> м
+        Lambda = self.struct[chunk].lam / 10 ** 9  # нм -> м
+        potential = self.potential[chunk] * 1.60218e-19
         kappa /= 10 ** 9
 
         theta = np.linspace(0., np.pi, pi_pts)
@@ -444,17 +604,19 @@ class qclSolver:
 
         q_sq = k_f + k_i - 2 * np.sqrt(k_f) * np.sqrt(k_i) * np.cos(theta)
 
-        Psi_i = self.psi[:, init]
-        Psi_f = self.psi[:, fin]
+        Psi_i = self.psi[chunk][:, init]
+        Psi_f = self.psi[chunk][:, fin]
 
         z_int = []
         n_int = []
-        for i in range(1, len(self.struct.layers) + 1):
-            z_int = np.append(z_int, self.struct.layerPos(i))
+        for i in range(1, len(self.struct[chunk].layers) + 1):
+            z_int = np.append(z_int, self.struct[chunk].layerPos(i))
         z_int = z_int - z_int[0] + self.side
+        if chunk != 0:
+            z_int = z_int - self.side + self.struct_end[chunk-1]
 
         for i in range(0, len(z_int)):
-            n_int = np.append(n_int, np.argwhere(self.grid < z_int[i])[-1])
+            n_int = np.append(n_int, np.argwhere(self.grid[chunk] < z_int[i])[-1])
         n_int = n_int.astype(int)
 
         c_mat = np.exp(-h * np.abs(n_int - n_int[:, np.newaxis]) / kappa)
@@ -467,13 +629,13 @@ class qclSolver:
 
         return w
 
-    def w_m(self, i, f, E_pts=50):
+    def w_m(self, i, f, chunk, E_pts=50):
 
         # add integration precision
 
-        m = self.mass_sub[i]
-        Emax = self.potential[0] * 1.60218e-19
-        E_i = self.eigs[i] * 1.60218e-19
+        m = self.mass_sub[chunk][i]
+        Emax = self.potential[chunk][0] * 1.60218e-19
+        E_i = self.eigs[chunk][i] * 1.60218e-19
         planck = qclSolver.fundamentals["planck"]
         k_bol = qclSolver.fundamentals["k-bol"]
         TE = self.TE
@@ -483,10 +645,10 @@ class qclSolver:
 
         sigma = planck ** 2 / m / k_bol / TE * step
 
-        w_1 = lambda ks: self.w_lo_ph(ks, i, f)
-        w_2 = lambda ks: self.w_ad(ks, i, f)
-        w_3 = lambda ks: self.w_dop(ks, i, f)
-        w_4 = lambda ks: self.w_ifr(ks, i, f)
+        w_1 = lambda ks: self.w_lo_ph(ks, i, f, chunk)
+        w_2 = lambda ks: self.w_ad(ks, i, f, chunk)
+        w_3 = lambda ks: self.w_dop(ks, i, f, chunk)
+        w_4 = lambda ks: self.w_ifr(ks, i, f, chunk)
 
         I1 = (np.array([w_1(k ** 2) for k in kGrid]) * kGrid * np.exp(
             -planck ** 2 * kGrid ** 2 / 2 / m / k_bol / TE)).sum()
@@ -501,62 +663,85 @@ class qclSolver:
 
     def Build_W(self, ncpu=4):
         # add integration precision
+        W_list = []
+        old_settings = np.seterr(all='ignore')
+
         if ncpu > 1:
+            for chunk in range(0,len(self.struct)):
 
-            with Pool(processes=ncpu) as pool:
-                W = pool.starmap(self.w_m, product(range(0, len(self.eigs)), repeat=2))
-            W = np.array(W).reshape(len(self.eigs), len(self.eigs))
+                with Pool(processes=ncpu) as pool:
+                    W = pool.starmap(partial(self.w_m,chunk=chunk), product(range(0, len(self.eigs[chunk])), repeat=2))
+                W = np.array(W).reshape(len(self.eigs[chunk]), len(self.eigs[chunk]))
 
-            for i in range(0, len(self.eigs)):
-                W[i][i] = 0.
-                W[i][i] = -W[i][:].sum()
-            self.W = W  # ???
+                for i in range(0, len(self.eigs[chunk])):
+                    W[i][i] = 0.
+                    W[i][i] = -W[i][:].sum()
+
+                W_list.append(W)
 
         else:
+            for chunk in range(0, len(self.struct)):
+                W = np.zeros((len(self.eigs[chunk]), len(self.eigs[chunk])))
+                for i in range(0, len(self.eigs[chunk])):
+                    for f in range(0, len(self.eigs[chunk])):
+                        if i != f:
+                            W[i][f] = self.w_m(i, f, chunk)
 
-            W = np.zeros((len(self.eigs), len(self.eigs)))
-            for i in range(0, len(self.eigs)):
-                for f in range(0, len(self.eigs)):
-                    if i != f:
-                        W[i][f] = self.w_m(i, f)
+                for i in range(0, len(self.eigs[chunk])):
+                    W[i][i] = -W[i][:].sum()
+                W_list.append(W)
 
-            for i in range(0, len(self.eigs)):
-                W[i][i] = -W[i][:].sum()
-            self.W = W
+        np.seterr(**old_settings)
+
+        self.W = W_list
+
 
     # ============================================
     # =============== TUNNELLING =================
     # ============================================
 
-    def findOmega(self, i, f):
+    def findOmega(self, i, f, i_chunk, f_chunk):
+
+        if f_chunk - i_chunk != 1:
+            if not (f_chunk == 0 and i_chunk == len(self.struct)-1):
+                return 0, 0
 
         planck = qclSolver.fundamentals["planck"]
         m0 = qclSolver.fundamentals["m0"]
-        U = self.U / 10 ** 7
-        side = self.side
-        grid = self.grid
-        length = self.struct.length
-        E_i = self.eigs[i]
-        E_f = self.eigs[f]
-        Ep = self.Ep
 
-        front = np.argwhere(grid <= side)[-1][-1]
-        back = np.argwhere(grid <= side + length)[-1][-1]
+        E_i = self.eigs[i_chunk][i]
+        E_f = self.eigs[f_chunk][f]
+        Ep_i = self.Ep[i_chunk]
+        Ep_f = self.Ep[f_chunk]
+        meff_i = self.meff[i_chunk]
+        meff_f = self.meff[f_chunk]
+        v_i = self.potential[i_chunk]
+        v_f = self.potential[f_chunk]
 
-        Ep_coupl = np.append(Ep[:back], Ep[front:])
-        m_coupl = np.append(self.meff[:back], self.meff[front:]) * m0
-        v_coupl = np.append(self.potential[:back], self.potential[front:] - U * length) * 1.60218e-19
+        ends = np.append(self.shifts[0], self.struct_end)
+
+        back = np.argwhere(self.grid[i_chunk] <= ends[i_chunk+1])[-1][-1] + 1
+        front = np.argwhere(self.grid[f_chunk] <= ends[f_chunk])[-1][-1] + 2
+        e_shift = - v_f[front-1] + v_i[back]
+
+        v_f = v_f + e_shift
+
+        Ep_coupl = np.append(Ep_i[:back], Ep_f[front:])
+        m_coupl = np.append(meff_i[:back], meff_f[front:]) * m0
+        v_coupl = np.append(v_i[:back], v_f[front:]) * 1.60218e-19
+
         h = self.step / 10 ** 9
-        n_ap = len(v_coupl) - len(self.psi[:, f])
+        n_ap_i = len(v_coupl) - len(self.psi[i_chunk][:, i])
+        n_ap_f = len(v_coupl) - len(self.psi[f_chunk][:, f])
 
-        psi_l = np.append(self.psi[:, i], np.zeros(n_ap))
-        psi_r = np.append(np.zeros(n_ap), self.psi[:, f])
+        psi_l = np.append(self.psi[i_chunk][:, i], np.zeros(n_ap_i))
+        psi_r = np.append(np.zeros(n_ap_f), self.psi[f_chunk][:, f])
 
         der_l = (np.append(psi_l, 0.) - np.append(0., psi_l))[1:] / 2 / h
         der_r = (np.append(psi_r, 0.) - np.append(0., psi_r))[1:] / 2 / h
 
         m_l = m_coupl * (1 + (E_i - v_coupl / 1.60218e-19) / (m_coupl / m0 * Ep_coupl))
-        m_r = m_coupl * (1 + (E_f - U * grid[back] - v_coupl / 1.60218e-19) / (m_coupl / m0 * Ep_coupl))
+        m_r = m_coupl * (1 + (E_f + e_shift - v_coupl / 1.60218e-19) / (m_coupl / m0 * Ep_coupl))
 
         K_lr = planck ** 2 * h / 2 * (m_l * der_l / m_l * der_r / m_r).sum()
         K_rl = planck ** 2 * h / 2 * (m_r * der_l / m_l * der_r / m_r).sum()
@@ -574,38 +759,75 @@ class qclSolver:
         h_lr = ((K_lr + T_lr) - r * (K_r + T_r)) / delta
         h_rl = ((K_rl + T_rl) - r * (K_l + T_l)) / delta
 
-        return np.sqrt(np.abs(h_lr * h_rl)) / planck
+        return np.sqrt(np.abs(h_lr * h_rl)) / planck, e_shift
 
-    def Build_R(self):
-        eigs = self.eigs
-        N = len(eigs)
+    def Build_R_local(self, i_chunk, f_chunk):
+
+        eigs_i = self.eigs[i_chunk]
+        eigs_f = self.eigs[f_chunk]
+        N = len(eigs_i)
+        M = len(eigs_f)
+
         planck = qclSolver.fundamentals["planck"]
-        length = self.struct.length
-        mass_sub = self.mass_sub
+        mass_sub_i = self.mass_sub[i_chunk]
+        mass_sub_f = self.mass_sub[f_chunk]
         Population = self.Population
         TE = self.TE
 
-        R_forw = np.zeros((N, N))
-        R_back = np.zeros((N, N))
-        for i in range(0, N):
-            for f in range(0, N):
-                if i != f:
-                    tau_ort = 1 / (1 / self.tau_pure - (self.W[i][i] + self.W[f][f]) / 2)
-
-                    delta_if = -(eigs[i] - eigs[f] + self.U * length / 10 ** 7) / planck * 1.60218e-19
-                    R_forw[i][f] = 2 * self.findOmega(i, f) ** 2 * tau_ort / (
-                                1 + delta_if ** 2 * tau_ort ** 2) * qclSolver.sigma_b(delta_if, Population[i],
-                                                                            mass_sub[i], TE)
-                    R_back[f][i] = 2 * self.findOmega(i, f) ** 2 * tau_ort / (
-                                1 + delta_if ** 2 * tau_ort ** 2) * qclSolver.sigma_b(-delta_if, Population[f],mass_sub[f], TE)
+        R_forw = np.zeros((N, M))
+        R_back = np.zeros((M, N))
 
         for i in range(0, N):
-            R_forw[i][i] = -R_forw[i][:].sum()
-            R_back[i][i] = -R_back[i][:].sum()
+            for f in range(0, M):
+
+                tau_ort = 1 / (1 / self.tau_pure - (self.W[i_chunk][i][i] + self.W[f_chunk][f][f]) / 2)
+                omega, e_shift = self.findOmega(i, f, i_chunk, f_chunk)
+
+                delta_if = -(eigs_i[i] - eigs_f[f] - e_shift) / planck * 1.60218e-19
+
+                R_forw[i][f] = 2 * omega ** 2 * tau_ort / (1 + delta_if ** 2 * tau_ort ** 2) \
+                               * qclSolver.sigma_b(delta_if, Population[i_chunk][i], mass_sub_i[i], TE)
+                R_back[f][i] = 2 * omega ** 2 * tau_ort / (1 + delta_if ** 2 * tau_ort ** 2) \
+                               * qclSolver.sigma_b(-delta_if, Population[f_chunk][f], mass_sub_f[f], TE)
 
         return R_forw, R_back
 
-    Chi = lambda x, TE: np.heaviside(-x, 0) + np.heaviside(x, 0) * np.exp(-np.abs(x) / qclSolver.fundamentals["k-bol"] / TE)
+    def Build_R(self):
+        R_f = []
+        R_b = []
+        for f_chunk in range(0, len(self.struct)):
+            rf_list, rb_list = [], []
+            for i_chunk in range(0, len(self.struct)):
+                if (f_chunk - i_chunk != 1) or (i_chunk == len(self.struct)-1 and f_chunk == 0):
+
+                    rf_list.append(np.zeros((len(self.eigs[i_chunk]), len(self.eigs[f_chunk]))))
+                    rb_list.append(np.zeros((len(self.eigs[f_chunk]), len(self.eigs[i_chunk]))))
+                else:
+                    r_f, r_b = self.Build_R_local(i_chunk, f_chunk)
+                    rf_list.append(r_f)
+                    rb_list.append(r_b)
+            R_f.append(np.vstack(rf_list))
+            R_b.append(np.hstack(rb_list))
+        R_f = np.hstack(R_f)
+        R_b = np.vstack(R_b)
+        R_cf = np.zeros_like(R_f)
+        R_cb = np.zeros_like(R_b)
+
+        r_f, r_b = self.Build_R_local(len(self.struct)-1, 0)
+        R_cf[len(R_cf[:, 0]) - len(r_f[:, 0]):, :len(r_f[0, :])] = r_f
+        R_cb[:len(r_b[:, 0]), len(R_cb[:, 0]) - len(r_b[0, :]):] = r_b
+
+        R_f += R_cf
+        R_b += R_cb
+
+        for i in range(0, len(R_f[0, :])):
+            R_f[i][i] = -R_f[i][:].sum()
+            R_b[i][i] = -R_b[i][:].sum()
+
+        return R_f, R_b
+
+    Chi = lambda x, TE: np.heaviside(-x, 0) + np.heaviside(x, 0) * np.exp(
+        -np.abs(x) / qclSolver.fundamentals["k-bol"] / TE)
 
     def sigma_b(delta_ab, N_b, m_b, TE):
         planck = qclSolver.fundamentals["planck"]
@@ -623,24 +845,24 @@ class qclSolver:
     # ============ LIGHT INTERACTION =============
     # ============================================
 
-    def gain_if(self, i, f, omega):
+    def gain_if(self, i, f, chunk, omega):
 
         eps_0 = qclSolver.fundamentals["eps0"]
         c = qclSolver.fundamentals["c"]
-        z = self.grid / 10 ** 9
+        z = self.grid[chunk] / 10 ** 9
         el = qclSolver.fundamentals["e-charge"]
         planck = qclSolver.fundamentals["planck"]
         k_bol = qclSolver.fundamentals["k-bol"]
         TE = self.TE
 
-        m_i = self.mass_sub[i]
-        m_f = self.mass_sub[f]
-        n_i = self.Population[i]
-        n_f = self.Population[f]
+        m_i = self.mass_sub[chunk][i]
+        m_f = self.mass_sub[chunk][f]
+        n_i = self.Population[chunk][i]
+        n_f = self.Population[chunk][f]
 
-        delta_E = (self.eigs[i] - self.eigs[f]) * 1.60218e-19
-        delta = (self.eigs[i] - self.eigs[f]) * 1.60218e-19 - planck * omega
-        gamma = -planck * (self.W[f, f]) / 2
+        delta_E = (self.eigs[chunk][i] - self.eigs[chunk][f]) * 1.60218e-19
+        delta = (self.eigs[chunk][i] - self.eigs[chunk][f]) * 1.60218e-19 - planck * omega
+        gamma = -planck * (self.W[chunk][f, f]) / 2
 
         Beta = 1 / k_bol / self.TE
         D_ei = m_i / np.pi / planck ** 2
@@ -654,12 +876,12 @@ class qclSolver:
                       1 / 6.24150965 / (10 ** 9),
                       xtol=1e-30)
 
-        psi_i = self.psi[:, i]
-        psi_f = self.psi[:, f]
+        psi_i = self.psi[chunk][:, i]
+        psi_f = self.psi[chunk][:, f]
         z_aw = (z[1] - z[0]) * (psi_i * z * psi_f).sum() * 100
 
         koeff = el ** 2 * z_aw ** 2 * delta_E ** 2 / (
-                    eps_0 * c * planck ** 2 * omega * self.refr * self.struct.length / 10 ** 7)
+                eps_0 * c * planck ** 2 * omega * self.refr * self.struct[chunk].length / 10 ** 7)
 
         deltaN = D_ei / Beta * np.log(
             (1 + np.exp(Beta * mu_i)) / (1 + qclSolver.Chi(delta, TE) * np.exp(Beta * mu_f))) + D_ef / Beta * np.log(
@@ -675,24 +897,24 @@ class qclSolver:
 
         return g, g_ci, g_cf
 
-    def tot_gain(self, omega):
-        N = len(self.eigs)
+    def tot_gain(self, chunk, omega):
+        N = len(self.eigs[chunk])
         gain = 0.
         for i in range(0, N):
             for f in range(0, N):
                 if i != f:
-                    gain += self.gain_if(i, f, omega)[0]
+                    gain += self.gain_if(i, f, chunk, omega)[0]
 
         return gain
 
-    def Build_G(self, omega):
-        N = len(self.eigs)
+    def Build_G_local(self, chunk, omega):
+        N = len(self.eigs[chunk])
         G = np.zeros((N, N), dtype=float)
         for i in range(0, N):
             for f in range(0, N):
                 if i > f:
-                    g_if = self.gain_if(i, f, omega)
-                    g_fi = self.gain_if(f, i, omega)
+                    g_if = self.gain_if(i, f, chunk, omega)
+                    g_fi = self.gain_if(f, i, chunk, omega)
                     G[f][i] += g_if[1] - g_fi[2]
                     G[i][f] += -g_if[2] + g_fi[1]
                     G[i][i] += -g_if[1] + g_fi[2]
@@ -700,10 +922,25 @@ class qclSolver:
 
         return G
 
+    def Build_G(self, omega):
+
+        for i in range(0,len(self.struct)):
+            if i == 0:
+                g = self.Build_G_local(i, omega)
+            else:
+                g = block_diag(g, self.Build_G_local(i, omega))
+
+        return g
+
     def tot_gain_optical(self, omega, S, iterations=3):
 
         N_carr_tot = self.N_carr / 10 ** 4
-        W = self.W
+
+        for i in range(0, len(self.struct)):
+            if i == 0:
+                W = self.W[i]
+            else:
+                W = block_diag(W, self.W[i])
 
         for i in range(0, iterations):
             R_1, R_2 = self.Build_R()
@@ -715,9 +952,17 @@ class qclSolver:
             ind = np.argmin(np.abs(Population[0].real))
             Population = Population[1][:, ind]
             Population = Population.real / (Population.real.sum()) * N_carr_tot
-            self.Population = Population
 
-        return self.tot_gain(omega)
+            self.Population = []
+            end = 0
+            for j in range(0, len(self.struct)):
+                self.Population.append(Population[end:end + len(self.eigs[j])])
+                end += len(self.eigs[j])
+        gain = 0.
+        for i in range(0, len(self.struct)):
+            gain += self.tot_gain(i, omega)
+
+        return gain
 
     def findMaxGain(self, lam_min, lam_max):
 
@@ -725,42 +970,46 @@ class qclSolver:
         lam = np.linspace(lam_min, lam_max, 1000) / 10 ** (6)
 
         omega_r = 2 * np.pi * c / lam
-        gain_r = self.tot_gain(omega_r)
+        gain_r = 0.
+        for i in range(0, len(self.struct)):
+            gain_r += self.tot_gain(i, omega_r)
         return lam[np.argmax(gain_r)], np.amax(gain_r)
 
     def optPower(self, lam):
         c = qclSolver.fundamentals["c"]
         planck = qclSolver.fundamentals["planck"]
-        el =  qclSolver.fundamentals["e-charge"]
+        el = qclSolver.fundamentals["e-charge"]
 
         Omega = 2 * np.pi * c / lam
-        S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 34,xtol=0.01)
+        S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 34, xtol=0.01)
 
         self.P = Omega * planck * S * self.periods * self.dim_w * self.alpha_m
 
-        R_1, R_2 = self.Build_R()
-        for i in range(0, len(self.eigs)):
-            R_1[i, i] = 0
-            R_2[i, i] = 0
+        R_1, R_2 = self.Build_R_local(len(self.struct) - 1, 0)
+        self.J_opt = -el * ((R_1 * self.Population[len(self.struct) - 1][:, np.newaxis]).sum()
+                            - (R_2 * self.Population[0][:, np.newaxis]).sum())
 
-        self.J_opt = -el * (np.sum(R_1 - R_2, axis=1) * self.Population).sum()
 
     # ============================================
     # ================= OUTPUT ===================
     # ============================================
 
-    def plotWF(self, saveFile = True):
+    def plotWF(self, saveFile=True):
 
-        plt.plot(self.grid, self.potential)
+        plt.plot(self.unified_grid, self.unified_potential)
         plt.xlabel('z, nm')
         plt.ylabel('E, eV')
-        for i in range(0, len(self.eigs)):
-            plt.plot(self.grid[:], (self.psi[:, i] / 10 ** 4) ** 2 / 20 + self.eigs[i])
+        for i in range(0, len(self.unified_eigs)):
+            grid = self.unified_grid[:]
+            psi = (self.unified_psi[:, i] / 10 ** 4) ** 2 / 20
+            grid = np.delete(grid, np.argwhere(psi == 0.))
+            psi = np.delete(psi, np.argwhere(psi == 0.))
+            plt.plot(grid, psi + self.unified_eigs[i])
         if saveFile:
             plt.savefig('./WaveFunc.png', format='png', dpi=1000)
         plt.show()
 
-    def plotGainSP(self, lam_min, lam_max, saveFile = True):
+    def plotGainSP(self, lam_min, lam_max, saveFile=True):
 
         c = qclSolver.fundamentals["c"]
         lam = np.linspace(lam_min, lam_max, 1000) / 10 ** (6)
@@ -776,7 +1025,7 @@ class qclSolver:
             plt.savefig('./Gain.png', format='png', dpi=1000)
         plt.show()
 
-    def plotPopulation(self, saveFile = True):
+    def plotPopulation(self, saveFile=True):
 
         print(self.Population)
         plt.plot(self.Population)
@@ -788,19 +1037,18 @@ class qclSolver:
 
         print(self.eigs)
         if not self.evaluate_W:
-            print('State populations:',self.Population)
+            print('State populations:', self.Population)
             print('Current density:', round(self.J_d / 1000, 3), 'kA/cm^2')
-            if self.P > 0 :
+            if self.P > 0:
                 print('Optical Current Density:', self.J_opt / 1000, 'kA/cm^2')
                 print('Optical Power:', self.P / 1000, 'mWt')
 
-    def generatePlotOutput(self, lam_min = None, lam_max = None, saveFile = True):
+    def generatePlotOutput(self, lam_min=None, lam_max=None, saveFile=True):
         self.plotWF(saveFile=saveFile)
         if not self.evaluate_W:
             self.plotPopulation(saveFile=saveFile)
-            if lam_max != None :
+            if lam_max != None:
                 self.plotGainSP(lam_min=lam_min, lam_max=lam_max, saveFile=saveFile)
-
 
     # ============================================
     # ================== MISC ====================
@@ -811,4 +1059,4 @@ class qclSolver:
             self.Build_W(ncpu=ncpu)
             self.evaluate_W = False
 
-        return np.diag(-1/self.W)
+        return np.diag(-1 / self.W)
