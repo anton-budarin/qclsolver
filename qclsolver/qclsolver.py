@@ -125,7 +125,7 @@ class qclSolver:
 
         # various parameters
 
-        self.tau_pure = 0.1 * 10 ** (-12)  # pure dephasing time
+        self.tau_pure = 0.5 * 10 ** (-13)  # pure dephasing time
 
         self.periods = 30
         self.dim_l = 0.3  # cm
@@ -427,17 +427,20 @@ class qclSolver:
         for i in range(0, r_iter):
             R_1, R_2 = self.Build_R()
 
-            population = np.linalg.eig((W + R_1 + R_2).transpose())
+            matrix = (W + R_1 + R_2).T
+            population = np.linalg.eig(matrix)
 
-            ind = np.argmin(np.abs(population[0].real))
+            ind = np.argmin(np.abs(population[0]))
+
             population = population[1][:, ind]
             population = population.real / (population.real.sum()) * self.N_carr / 10 ** 4
 
-        self.Population = []
-        end = 0
-        for i in range(0, len(self.struct)):
-            self.Population.append(population[end:end + len(self.eigs[i])])
-            end += len(self.eigs[i])
+            self.Population = []
+            end = 0
+            for j in range(0, len(self.struct)):
+                self.Population.append(population[end:end + len(self.eigs[j])])
+                end += len(self.eigs[j])
+
 
         self.TPop = False
 
@@ -667,7 +670,7 @@ class qclSolver:
         old_settings = np.seterr(all='ignore')
 
         if ncpu > 1:
-            for chunk in range(0,len(self.struct)):
+            for chunk in range(0, len(self.struct)):
 
                 with Pool(processes=ncpu) as pool:
                     W = pool.starmap(partial(self.w_m,chunk=chunk), product(range(0, len(self.eigs[chunk])), repeat=2))
@@ -835,8 +838,8 @@ class qclSolver:
         Beta = 1 / k_bol / TE
         D_e = m_b / np.pi / planck ** 2
         mu_b = brentq(lambda mu_t: N_b - D_e / Beta * np.logaddexp(0, Beta * mu_t),
-                      -1 / 6.24150965 / (10 ** 13),
-                      1 / 6.24150965 / (10 ** 13),
+                      -1 / 6.24150965 / 10**12,
+                      1 / 6.24150965 / 10**12,
                       xtol=1e-30)
 
         return np.log(1 + np.exp(Beta * mu_b) * qclSolver.Chi(planck * delta_ab, TE)) / np.logaddexp(0, Beta * mu_b)
@@ -915,10 +918,11 @@ class qclSolver:
                 if i > f:
                     g_if = self.gain_if(i, f, chunk, omega)
                     g_fi = self.gain_if(f, i, chunk, omega)
-                    G[f][i] += g_if[1] - g_fi[2]
-                    G[i][f] += -g_if[2] + g_fi[1]
+                    G[i][f] += g_if[1] - g_fi[2]
+                    G[f][i] += -g_if[2] + g_fi[1]
                     G[i][i] += -g_if[1] + g_fi[2]
                     G[f][f] += g_if[2] - g_fi[1]
+
 
         return G
 
@@ -932,9 +936,11 @@ class qclSolver:
 
         return g
 
-    def tot_gain_optical(self, omega, S, iterations=3):
+    def tot_gain_optical(self, omega, S, r_iter=4):
 
         N_carr_tot = self.N_carr / 10 ** 4
+
+        pop_temp = self.Population
 
         for i in range(0, len(self.struct)):
             if i == 0:
@@ -942,14 +948,15 @@ class qclSolver:
             else:
                 W = block_diag(W, self.W[i])
 
-        for i in range(0, iterations):
+        for i in range(0, r_iter):
+
             R_1, R_2 = self.Build_R()
             G = self.Build_G(omega)
             G = np.array(G * S, dtype=float)
 
             Population = np.linalg.eig((W + R_1 + R_2 + G).transpose())
 
-            ind = np.argmin(np.abs(Population[0].real))
+            ind = np.argmin(np.abs(Population[0]))
             Population = Population[1][:, ind]
             Population = Population.real / (Population.real.sum()) * N_carr_tot
 
@@ -958,9 +965,13 @@ class qclSolver:
             for j in range(0, len(self.struct)):
                 self.Population.append(Population[end:end + len(self.eigs[j])])
                 end += len(self.eigs[j])
+
         gain = 0.
         for i in range(0, len(self.struct)):
             gain += self.tot_gain(i, omega)
+
+        self.pop_g = self.Population
+        self.Population = pop_temp
 
         return gain
 
@@ -975,19 +986,21 @@ class qclSolver:
             gain_r += self.tot_gain(i, omega_r)
         return lam[np.argmax(gain_r)], np.amax(gain_r)
 
-    def optPower(self, lam):
+    def optPower(self, lam, r_iter=4):
         c = qclSolver.fundamentals["c"]
         planck = qclSolver.fundamentals["planck"]
         el = qclSolver.fundamentals["e-charge"]
 
         Omega = 2 * np.pi * c / lam
-        S = brentq(lambda s: self.tot_gain_optical(Omega, s) - self.alpha_m - self.alpha_w, 0, 10 ** 34, xtol=0.01)
+        S = brentq(lambda s: self.tot_gain_optical(Omega, s, r_iter=r_iter) - self.alpha_m - self.alpha_w,
+                   0, 10 ** 35,
+                   xtol=0.01, maxiter=200)
 
         self.P = Omega * planck * S * self.periods * self.dim_w * self.alpha_m
 
         R_1, R_2 = self.Build_R_local(len(self.struct) - 1, 0)
-        self.J_opt = -el * ((R_1 * self.Population[len(self.struct) - 1][:, np.newaxis]).sum()
-                            - (R_2 * self.Population[0][:, np.newaxis]).sum())
+        self.J_opt = -el * ((R_1 * self.pop_g[len(self.struct) - 1][:, np.newaxis]).sum()
+                            - (R_2 * self.pop_g[0][:, np.newaxis]).sum())
 
 
     # ============================================
@@ -1015,7 +1028,9 @@ class qclSolver:
         lam = np.linspace(lam_min, lam_max, 1000) / 10 ** (6)
 
         omega_r = 2 * np.pi * c / lam
-        gain_r = self.tot_gain(omega_r)
+        gain_r = 0.
+        for i in range(0, len(self.struct)):
+            gain_r += self.tot_gain(i, omega_r)
 
         plt.figure(figsize=(10, 5))
         plt.plot(lam * 10 ** 6, gain_r)
