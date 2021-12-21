@@ -295,6 +295,18 @@ class qclSolver:
         self.psi = psi_out
 
     def unite_chunks(self):
+
+        if len(self.struct) == 1:
+            self.unified_grid = self.grid[0]
+            self.unified_potential = self.potential[0]
+            self.unified_dop = self.dop[0]
+            self.unified_perm = self.Perm[0]
+            self.unified_psi = self.psi[0]
+            self.unified_eigs = self.eigs[0]
+            self.unified_mass_sub = self.mass_sub[0]
+
+            return None
+
         front, back = [], []
 
         front.append(0)
@@ -1009,6 +1021,7 @@ class qclSolver:
 
     def plotWF(self, saveFile=True):
 
+        plt.figure(figsize=(10, 8))
         plt.plot(self.unified_grid, self.unified_potential)
         plt.xlabel('z, nm')
         plt.ylabel('E, eV')
@@ -1029,6 +1042,7 @@ class qclSolver:
 
         omega_r = 2 * np.pi * c / lam
         gain_r = 0.
+
         for i in range(0, len(self.struct)):
             gain_r += self.tot_gain(i, omega_r)
 
