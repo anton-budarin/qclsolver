@@ -92,7 +92,7 @@ class qclSolver:
 
             self.comp.append(np.array([self.struct[i].layers[int(self.index[i](z))].material.x for z in self.grid[i]]))
 
-            self.comp[i][self.comp is None] = 0
+            self.comp[i][self.comp[i] == None] = 0
 
             self.Ep.append(np.array([(self.struct[i].layers[int(self.index[i](z))].material.params['Ep'])
                                      for z in self.grid[i]]))
@@ -542,7 +542,9 @@ class qclSolver:
         a = self.lattconst[chunk][::skip] / 10 ** 10
         x = self.comp[chunk][::skip]
 
-        w = h * m_f / 8 / planck ** 3 * (a ** 3 * Valloy ** 2 * x * (1 - x) * Psi_i ** 2 * Psi_f ** 2).sum()
+        sum = (a ** 3 * Valloy ** 2 * x * (1 - x) * Psi_i ** 2 * Psi_f ** 2).sum()
+
+        w = h * m_f / 8 / planck ** 3 * sum
 
         return w
 
@@ -685,7 +687,7 @@ class qclSolver:
             for chunk in range(0, len(self.struct)):
 
                 with Pool(processes=ncpu) as pool:
-                    W = pool.starmap(partial(self.w_m,chunk=chunk), product(range(0, len(self.eigs[chunk])), repeat=2))
+                    W = pool.starmap(partial(self.w_m, chunk=chunk), product(range(0, len(self.eigs[chunk])), repeat=2))
                 W = np.array(W).reshape(len(self.eigs[chunk]), len(self.eigs[chunk]))
 
                 for i in range(0, len(self.eigs[chunk])):
@@ -1088,4 +1090,10 @@ class qclSolver:
             self.Build_W(ncpu=ncpu)
             self.evaluate_W = False
 
-        return np.diag(-1 / self.W)
+        for i in range(0, len(self.struct)):
+            if i == 0:
+                W = self.W[i]
+            else:
+                W = block_diag(W, self.W[i])
+
+        return -1 / np.diag(W)
